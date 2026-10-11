@@ -107,27 +107,43 @@ object DnsExperimentPlanner {
 }
 
 /**
- * Reads the active experiment mode. Debug builds read a debug-only preference; a release build is
- * always [DnsExperimentMode.BASELINE] no matter what is stored.
+ * Resolves the configuration actually used for a start.
+ *
+ * The shipped coexistence rule applies to every build. A debug build may additionally arm an
+ * override for the current process only — it is never stored, so a leftover can never quietly
+ * replace the rule in a later session, and a release build has no way to arm one at all.
  */
 object DnsExperiment {
 
-    internal const val PREFS = "kuiesblock_debug_experiment"
-    internal const val KEY_MODE = "dns_experiment_mode"
+    /** Legacy keys from the first experiment build; the stored mode is deleted, never read. */
+    internal const val LEGACY_PREFS = "kuiesblock_debug_experiment"
+    internal const val LEGACY_KEY_MODE = "dns_experiment_mode"
+
+    @Volatile
+    private var armedOverride: DnsExperimentMode? = null
+
+    @Volatile
+    private var legacyCleared = false
+
+    /** The mode a debug session armed for this process, or null when the shipped rule applies. */
+    fun armedMode(): DnsExperimentMode? = armedOverride
 
     fun isDebuggable(context: Context): Boolean =
         (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-    /** Pure form of [mode]: a non-debuggable build can never escape the coexistence rule below. */
+    /**
+     * Pure form of [mode]: a non-debuggable build can never escape the coexistence rule, and a debug
+     * build can only escape it through an override explicitly armed for this process.
+     */
     fun effectiveMode(
         isDebuggable: Boolean,
-        storedRaw: String?,
+        armed: DnsExperimentMode?,
         strictPrivateDns: Boolean
     ): DnsExperimentMode {
         val coexistenceDefault =
             if (strictPrivateDns) DnsExperimentMode.E2_NO_DNS_DECLARATION else DnsExperimentMode.BASELINE
         if (!isDebuggable) return coexistenceDefault
-        return DnsExperimentMode.fromStorageKeyOrNull(storedRaw) ?: coexistenceDefault
+        return armed ?: coexistenceDefault
     }
 
     /**
@@ -135,24 +151,36 @@ object DnsExperiment {
      *
      * The shipped rule is that only strict Private DNS steps aside: there the tunnel must not declare
      * a DNS server, because the system resolver would then open DoT to our own address and nothing
-     * could answer it. Every other mode keeps the intercepting BASELINE. A debug build may override
-     * the rule through [setMode] to reproduce the broken case or to run the E1 experiment; a release
-     * build never can.
+     * could answer it. Every other mode keeps the intercepting BASELINE. A debug session may arm an
+     * override to reproduce the broken case or to run the E1 experiment.
      */
-    fun mode(context: Context, strictPrivateDns: Boolean): DnsExperimentMode =
-        effectiveMode(isDebuggable(context), readRaw(context), strictPrivateDns)
+    fun mode(context: Context, strictPrivateDns: Boolean): DnsExperimentMode {
+        clearLegacyStoredMode(context)
+        return effectiveMode(isDebuggable(context), armedOverride, strictPrivateDns)
+    }
 
-    /** Debug only. The debug source set's receiver is the only caller. */
-    fun setMode(context: Context, mode: DnsExperimentMode) {
+    /**
+     * Debug only; the debug source set's receiver is the only caller. The value lives only as long as
+     * this app process — nothing is stored, so nothing can survive into a later session. That is the
+     * fix for the stale experiment that quietly replaced the shipped rule.
+     */
+    fun arm(context: Context, mode: DnsExperimentMode) {
         if (!isDebuggable(context)) return
+        armedOverride = mode
+    }
+
+    /**
+     * The first experiment build persisted its mode, which then silently overrode the shipped rule in
+     * a much later session. The key is deleted so that stale value can never be read again; it was
+     * never a supported storage location.
+     */
+    private fun clearLegacyStoredMode(context: Context) {
+        if (legacyCleared || !isDebuggable(context)) return
+        legacyCleared = true
         runCatching {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(KEY_MODE, mode.storageKey)
+            context.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE).edit()
+                .remove(LEGACY_KEY_MODE)
                 .apply()
         }
     }
-
-    private fun readRaw(context: Context): String? = runCatching {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, null)
-    }.getOrNull()
 }

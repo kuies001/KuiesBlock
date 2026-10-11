@@ -123,17 +123,23 @@ class DnsExperimentTest {
 
     @Test
     fun aReleaseBuildAlwaysFollowsTheCoexistenceRule() {
-        // Nothing that can be stored may change a release build; only strict Private DNS does.
-        for (stored in listOf(null, "baseline", "e2", "e1", "E2", "garbage", "")) {
+        // Nothing armed may change a release build; only strict Private DNS does.
+        val armable = listOf(
+            null,
+            DnsExperimentMode.BASELINE,
+            DnsExperimentMode.E2_NO_DNS_DECLARATION,
+            DnsExperimentMode.E1_REAL_DOT_ADDRESS
+        )
+        for (armed in armable) {
             assertEquals(
-                "stored=$stored",
+                "armed=$armed",
                 DnsExperimentMode.BASELINE,
-                DnsExperiment.effectiveMode(isDebuggable = false, storedRaw = stored, strictPrivateDns = false)
+                DnsExperiment.effectiveMode(isDebuggable = false, armed = armed, strictPrivateDns = false)
             )
             assertEquals(
-                "stored=$stored strict",
+                "armed=$armed strict",
                 DnsExperimentMode.E2_NO_DNS_DECLARATION,
-                DnsExperiment.effectiveMode(isDebuggable = false, storedRaw = stored, strictPrivateDns = true)
+                DnsExperiment.effectiveMode(isDebuggable = false, armed = armed, strictPrivateDns = true)
             )
         }
     }
@@ -142,27 +148,53 @@ class DnsExperimentTest {
     fun strictPrivateDnsIsTheOnlyModeThatStepsAside() {
         assertEquals(
             DnsExperimentMode.E2_NO_DNS_DECLARATION,
-            DnsExperiment.effectiveMode(true, null, strictPrivateDns = true)
+            DnsExperiment.effectiveMode(true, armed = null, strictPrivateDns = true)
         )
         // Off and automatic keep the intercepting configuration.
-        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(true, null, strictPrivateDns = false))
-        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(false, null, strictPrivateDns = false))
+        assertEquals(
+            DnsExperimentMode.BASELINE,
+            DnsExperiment.effectiveMode(true, armed = null, strictPrivateDns = false)
+        )
+        assertEquals(
+            DnsExperimentMode.BASELINE,
+            DnsExperiment.effectiveMode(false, armed = null, strictPrivateDns = false)
+        )
     }
 
     @Test
-    fun aDebugBuildMayOverrideTheRuleToReproduceTheBrokenCase() {
+    fun aDebugBuildMayArmAnOverrideToReproduceTheBrokenCase() {
         // Forcing BASELINE while strict is exactly how the original failure is reproduced.
         assertEquals(
             DnsExperimentMode.BASELINE,
-            DnsExperiment.effectiveMode(true, "baseline", strictPrivateDns = true)
+            DnsExperiment.effectiveMode(true, armed = DnsExperimentMode.BASELINE, strictPrivateDns = true)
         )
         assertEquals(
             DnsExperimentMode.E2_NO_DNS_DECLARATION,
-            DnsExperiment.effectiveMode(true, "e2", strictPrivateDns = false)
+            DnsExperiment.effectiveMode(
+                true,
+                armed = DnsExperimentMode.E2_NO_DNS_DECLARATION,
+                strictPrivateDns = false
+            )
         )
         assertEquals(
             DnsExperimentMode.E1_REAL_DOT_ADDRESS,
-            DnsExperiment.effectiveMode(true, "e1", strictPrivateDns = false)
+            DnsExperiment.effectiveMode(true, armed = DnsExperimentMode.E1_REAL_DOT_ADDRESS, strictPrivateDns = false)
+        )
+    }
+
+    @Test
+    fun anOverrideIsNeverReplayedFromStorage() {
+        // The regression this guards: the first experiment build persisted its mode, so a stale
+        // "e2" silently replaced the shipped rule days later. Arming is process-scoped now, so a
+        // fresh process starts with nothing armed.
+        assertEquals(null, DnsExperiment.armedMode())
+        assertEquals(
+            DnsExperimentMode.E2_NO_DNS_DECLARATION,
+            DnsExperiment.effectiveMode(true, armed = DnsExperiment.armedMode(), strictPrivateDns = true)
+        )
+        assertEquals(
+            DnsExperimentMode.BASELINE,
+            DnsExperiment.effectiveMode(true, armed = DnsExperiment.armedMode(), strictPrivateDns = false)
         )
     }
 

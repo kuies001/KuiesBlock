@@ -148,6 +148,13 @@ class KuiesVpnService : VpnService() {
      */
     private var appliedDeclaration: TunnelDeclaration? = null
 
+    /**
+     * Bumped for every start attempt. Async results (DNS verification, the E1 bootstrap) carry the
+     * generation they were started under, so a result that arrives after the tunnel was replaced is
+     * discarded instead of corrupting the new one.
+     */
+    private var tunnelGeneration = 0
+
     private var privateDnsObserver: ContentObserver? = null
 
     /**
@@ -192,6 +199,8 @@ class KuiesVpnService : VpnService() {
     private fun startProtection() {
         running = true
         isRunning = true
+        // One generation per start attempt: async results tagged with an older one are discarded.
+        tunnelGeneration++
         val timeline = StartupTimeline { SystemClock.elapsedRealtime() }
         startupTimeline = timeline
         startupBudget = StartupBudget(STARTUP_TOTAL_TIMEOUT_MILLIS) { SystemClock.elapsedRealtime() }
@@ -240,9 +249,14 @@ class KuiesVpnService : VpnService() {
         routePlan = plan
 
         // One place only decides the tunnel configuration; nothing else branches on the mode.
-        val strictPrivateDns = PrivateDnsSettings.read(this).isStrictHostname
+        val privateDns = PrivateDnsSettings.read(this)
+        val strictPrivateDns = privateDns.isStrictHostname
         val experimentMode = DnsExperiment.mode(this, strictPrivateDns)
-        logStartupDebug("dnsExperimentMode=${experimentMode.name} strictPrivateDns=$strictPrivateDns")
+        logStartupDebug(
+            "dnsDiag stage=start privateDnsMode=${privateDns.mode.name} strict=$strictPrivateDns " +
+                "configured=${experimentMode.name} override=${DnsExperiment.armedMode()?.name ?: "none"} " +
+                "generation=$tunnelGeneration"
+        )
         if (experimentMode == DnsExperimentMode.E1_REAL_DOT_ADDRESS) {
             // E1 needs the real DoT address, and the bootstrap blocks: resolve off the main thread.
             resolveRealDotAddress(underlying.dnsServers, plan, timeline)
@@ -270,6 +284,7 @@ class KuiesVpnService : VpnService() {
     ) {
         val host = DnsConfigStore(this).load().host
         val bootstrap = PlainDnsBootstrap(socketProtector(), underlyingDnsServers)
+        val generation = tunnelGeneration
         val thread = Thread({
             val startedAt = SystemClock.elapsedRealtime()
             val addresses = runCatching { bootstrap.resolve(host) }.getOrDefault(emptyList())
@@ -282,6 +297,8 @@ class KuiesVpnService : VpnService() {
                 Log.d(TAG, "e1DotAddress=${ipv4 ?: "none"}")
             }
             mainHandler.post {
+                // A resolution started for an earlier start attempt must not build a tunnel now.
+                if (generation != tunnelGeneration) return@post
                 if (!running) return@post
                 val declaration = DnsExperimentPlanner.declarationFor(
                     DnsExperimentMode.E1_REAL_DOT_ADDRESS,
@@ -323,6 +340,10 @@ class KuiesVpnService : VpnService() {
             DnsPath.SYSTEM_PRIVATE_DNS
         }
         appliedDeclaration = declaration
+        logStartupDebug(
+            "dnsDiag stage=established declaration=${declaration.kind(plan.dnsServerAddress)} " +
+                "generation=$tunnelGeneration"
+        )
         workers = newWorkerPool()
         // Re-assert the underlying network now that the tunnel exists.
         underlyingNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
@@ -633,12 +654,15 @@ class KuiesVpnService : VpnService() {
         }
         val attemptNumber = probeAttempts + 1
         val attemptStartedAt = SystemClock.elapsedRealtime()
+        val generation = tunnelGeneration
         try {
             executor.execute {
                 val result = transport?.exchange(probeQuery())
                 val attemptMillis = SystemClock.elapsedRealtime() - attemptStartedAt
                 mainHandler.post {
                     verificationInFlight.set(false)
+                    // A result from a tunnel that has already been replaced must not touch this one.
+                    if (generation != tunnelGeneration) return@post
                     if (!running) return@post
                     logStartupDebug(
                         "dnsVerify attempt=$attemptNumber durationMs=$attemptMillis result=${describeOutcome(result)}"
@@ -860,24 +884,31 @@ class KuiesVpnService : VpnService() {
      */
     private fun handlePrivateDnsChange() {
         if (!running) return
-        val strict = PrivateDnsSettings.read(this).isStrictHostname
-        val mode = DnsExperiment.mode(this, strict)
+        val privateDns = PrivateDnsSettings.read(this)
+        val mode = DnsExperiment.mode(this, privateDns.isStrictHostname)
         if (mode == DnsExperimentMode.E1_REAL_DOT_ADDRESS) {
             // E1 needs a blocking bootstrap to know its declaration; leave it alone rather than run
             // a network lookup from a settings callback.
-            logStartupDebug("privateDnsChange skipped under the E1 experiment")
+            logStartupDebug(
+                "dnsDiag stage=change action=SKIP reason=e1Experiment generation=$tunnelGeneration"
+            )
             return
         }
-        val candidate = DnsExperimentPlanner.declarationFor(mode, VpnRoutePlan.DEFAULT, realDotAddress = null)
-        when (PrivateDnsCoexistencePolicy.classify(appliedDeclaration, candidate)) {
-            PrivateDnsChange.NONE ->
-                logStartupDebug("privateDnsChange ignored: no running tunnel or unusable candidate")
-            PrivateDnsChange.REFRESH_STATUS ->
-                logStartupDebug("privateDnsChange: declaration unchanged, no restart")
-            PrivateDnsChange.RESTART_TUNNEL -> {
-                Log.i(TAG, "Private DNS mode changed; re-establishing the tunnel with a new declaration.")
-                restartTunnel()
-            }
+        val plan = VpnRoutePlan.DEFAULT
+        val candidate = DnsExperimentPlanner.declarationFor(mode, plan, realDotAddress = null)
+        val decision = PrivateDnsCoexistencePolicy.decide(appliedDeclaration, candidate)
+        logStartupDebug(
+            PrivateDnsCoexistencePolicy.diagnostic(
+                privateDnsMode = privateDns.mode.name,
+                applied = appliedDeclaration?.kind(plan.dnsServerAddress),
+                candidate = candidate?.kind(plan.dnsServerAddress),
+                decision = decision,
+                generation = tunnelGeneration
+            )
+        )
+        if (decision.change == PrivateDnsChange.RESTART_TUNNEL) {
+            Log.i(TAG, "Private DNS mode changed; re-establishing the tunnel with a new declaration.")
+            restartTunnel()
         }
     }
 

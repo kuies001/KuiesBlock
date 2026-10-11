@@ -12,9 +12,11 @@ import tw.kuies.block.vpn.KuiesVpnService
  * Debug-build only: this class lives in the `debug` source set, so a release APK has no such
  * component and cannot switch experiments.
  *
- * It stores the Private-DNS experiment mode and stops any running tunnel so the next start uses the
- * new declaration. It deliberately does not restart the tunnel by itself, so there can be no
- * uncontrolled rebuild loop.
+ * It arms the Private-DNS experiment mode **for the current app process only** — nothing is stored,
+ * so a leftover can never quietly replace the shipped rule in a later session (the earlier build
+ * persisted it, which is why a stale `e2` silently overrode the production policy). It also stops
+ * any running tunnel so the next start uses the new declaration, and it deliberately does not
+ * restart the tunnel by itself, so there can be no uncontrolled rebuild loop.
  *
  * Usage (debug APK):
  * ```
@@ -28,8 +30,8 @@ class DebugDnsExperimentReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val raw = intent.getStringExtra(EXTRA_MODE)
         val mode = DnsExperimentMode.fromStorageKey(raw)
-        DnsExperiment.setMode(context, mode)
-        Log.i(TAG, "Debug DNS experiment mode -> ${mode.name} (requested=$raw)")
+        DnsExperiment.arm(context, mode)
+        Log.i(TAG, "Debug DNS experiment armed -> ${mode.name} (requested=$raw, this process only)")
         // Stop the tunnel so the new declaration takes effect on the next start.
         runCatching { context.stopService(Intent(context, KuiesVpnService::class.java)) }
     }

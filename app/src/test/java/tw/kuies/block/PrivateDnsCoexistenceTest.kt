@@ -14,9 +14,12 @@ import tw.kuies.block.ui.ProtectionPresentation
 import tw.kuies.block.vpn.DnsExperimentMode
 import tw.kuies.block.vpn.DnsExperimentPlanner
 import tw.kuies.block.vpn.PrivateDnsChange
+import tw.kuies.block.vpn.PrivateDnsChangeReason
 import tw.kuies.block.vpn.PrivateDnsCoexistencePolicy
 import tw.kuies.block.vpn.TunnelDeclaration
+import tw.kuies.block.vpn.TunnelDeclarationKind
 import tw.kuies.block.vpn.VpnRoutePlan
+import tw.kuies.block.vpn.kind
 
 /**
  * Reacting to Android's Private DNS setting while protection runs, and the wording that goes with it.
@@ -176,5 +179,73 @@ class PrivateDnsCoexistenceTest {
         assertNull(steppingAside.dnsServer)
         assertEquals(intercepting.interfaceAddress, steppingAside.interfaceAddress)
         assertEquals(intercepting.dnsRoute, steppingAside.dnsRoute)
+    }
+
+    // --- the reason is recorded, and the diagnostic stays address-free -------------------------
+
+    @Test
+    fun theDecisionRecordsWhyItWasMade() {
+        assertEquals(
+            PrivateDnsChangeReason.NO_TUNNEL,
+            PrivateDnsCoexistencePolicy.decide(null, intercepting).reason
+        )
+        assertEquals(
+            PrivateDnsChangeReason.UNUSABLE_CANDIDATE,
+            PrivateDnsCoexistencePolicy.decide(intercepting, null).reason
+        )
+        assertEquals(
+            PrivateDnsChangeReason.DECLARATION_UNCHANGED,
+            PrivateDnsCoexistencePolicy.decide(intercepting, intercepting).reason
+        )
+        assertEquals(
+            PrivateDnsChangeReason.DECLARATION_CHANGED,
+            PrivateDnsCoexistencePolicy.decide(intercepting, steppingAside).reason
+        )
+    }
+
+    @Test
+    fun aDeclarationIsLabelledWithoutEverNamingAnAddress() {
+        assertEquals(TunnelDeclarationKind.INTERCEPTING, intercepting.kind(plan.dnsServerAddress))
+        assertEquals(TunnelDeclarationKind.NO_DNS_DECLARED, steppingAside.kind(plan.dnsServerAddress))
+
+        val e1 = DnsExperimentPlanner.declarationFor(
+            DnsExperimentMode.E1_REAL_DOT_ADDRESS,
+            plan,
+            "203.0.113.10"
+        )!!
+        val kind = e1.kind(plan.dnsServerAddress)
+        assertEquals(TunnelDeclarationKind.REAL_DOT_WITHOUT_ROUTE, kind)
+        assertFalse("label=$kind", kind.name.contains("203.0.113.10"))
+    }
+
+    @Test
+    fun theDiagnosticNamesTheStateButNoAddressOrHostname() {
+        val decision = PrivateDnsCoexistencePolicy.decide(intercepting, steppingAside)
+        val line = PrivateDnsCoexistencePolicy.diagnostic(
+            privateDnsMode = "HOSTNAME",
+            applied = intercepting.kind(plan.dnsServerAddress),
+            candidate = steppingAside.kind(plan.dnsServerAddress),
+            decision = decision,
+            generation = 7
+        )
+        assertTrue("line=$line", line.contains("mode=HOSTNAME"))
+        assertTrue("line=$line", line.contains("applied=INTERCEPTING"))
+        assertTrue("line=$line", line.contains("candidate=NO_DNS_DECLARED"))
+        assertTrue("line=$line", line.contains("action=RESTART_TUNNEL"))
+        assertTrue("line=$line", line.contains("reason=DECLARATION_CHANGED"))
+        assertTrue("line=$line", line.contains("generation=7"))
+        // Never a hostname, an address, or query content.
+        assertFalse("line=$line", line.contains("dns.kuies.tw"))
+        assertFalse("line=$line", line.contains("10.111.222"))
+        assertFalse("line=$line", line.contains("203.0.113"))
+    }
+
+    @Test
+    fun theDiagnosticSaysNoneWhenNothingIsInstalled() {
+        val decision = PrivateDnsCoexistencePolicy.decide(null, null)
+        val line = PrivateDnsCoexistencePolicy.diagnostic("OFF", null, null, decision, 3)
+        assertTrue("line=$line", line.contains("applied=none"))
+        assertTrue("line=$line", line.contains("candidate=none"))
+        assertTrue("line=$line", line.contains("reason=NO_TUNNEL"))
     }
 }
