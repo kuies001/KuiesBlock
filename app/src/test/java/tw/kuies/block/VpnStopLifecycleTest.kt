@@ -91,6 +91,30 @@ class VpnStopLifecycleTest {
     }
 
     @Test
+    fun aStopIsAuthoritativeFromEveryRunningState() {
+        val runningStates = listOf(
+            ProtectionState.STARTING,
+            ProtectionState.ACTIVE,
+            ProtectionState.ERROR
+        )
+        for (state in runningStates) {
+            val error = if (state == ProtectionState.ERROR) ProtectionError.DNS_TIMEOUT else null
+            ProtectionStatusHolder.update(state, error)
+            assertEquals("setup for $state", state, ProtectionStatusHolder.state)
+
+            // STOP must win from every running state, including a start still in progress.
+            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
+
+            assertEquals("after stop from $state", ProtectionState.AUTHORIZED_IDLE, ProtectionStatusHolder.state)
+            assertNull("after stop from $state", ProtectionStatusHolder.error)
+            assertFalse(
+                "after stop from $state",
+                ProtectionStateRules.isInterceptionActive(ProtectionStatusHolder.state)
+            )
+        }
+    }
+
+    @Test
     fun privateDnsStrictHostnameDetection() {
         val hostnameState = PrivateDnsState(PrivateDnsMode.HOSTNAME, "dns.kuies.tw")
         assertTrue(hostnameState.isStrictHostname)

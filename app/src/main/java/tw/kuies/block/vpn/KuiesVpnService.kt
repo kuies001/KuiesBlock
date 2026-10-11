@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -15,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -29,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 import tw.kuies.block.R
@@ -81,6 +84,23 @@ class KuiesVpnService : VpnService() {
     private val writeLock = Any()
     private val consecutiveFailures = AtomicInteger(0)
     private val loggedDrops = ConcurrentHashMap.newKeySet<PacketDropReason>()
+    private val verificationInFlight = AtomicBoolean(false)
+
+    private var startupBudget: StartupBudget? = null
+    private var startupTimeline: StartupTimeline? = null
+
+    /** Debug builds only; a release build never writes these timings. */
+    private val debugLoggingEnabled: Boolean by lazy {
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+
+    /** Fires once if the startup sequence has not reached a decision within the budget. */
+    private val startupWatchdog = Runnable {
+        if (running && ProtectionStatusHolder.state == ProtectionState.STARTING) {
+            Log.w(TAG, "Startup budget exhausted without a verified DNS round trip.")
+            requestFailOpen(ProtectionError.DNS_TIMEOUT)
+        }
+    }
 
     private var tunnel: ParcelFileDescriptor? = null
     private var tunnelInput: FileInputStream? = null
@@ -113,6 +133,12 @@ class KuiesVpnService : VpnService() {
     private var underlyingNetwork: Network? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            // Stop must always win, even mid-start: it clears the pending retries and tears down.
+            Log.i(TAG, "Explicit stop requested via ACTION_STOP.")
+            stopProtectionByUser()
+            return START_NOT_STICKY
+        }
         if (!VpnAuthorization.isGranted(this)) {
             Log.w(TAG, "Start requested without VPN authorization; not starting protection.")
             authorizationRevoked = true
@@ -124,13 +150,20 @@ class KuiesVpnService : VpnService() {
         if (!running) {
             startProtection()
         }
-        return START_STICKY
+        // Never sticky: a killed or stopped service must not be restarted with a null intent.
+        return START_NOT_STICKY
     }
 
     // --- start -------------------------------------------------------------------------------
 
     private fun startProtection() {
         running = true
+        isRunning = true
+        val timeline = StartupTimeline { SystemClock.elapsedRealtime() }
+        startupTimeline = timeline
+        startupBudget = StartupBudget(STARTUP_TOTAL_TIMEOUT_MILLIS) { SystemClock.elapsedRealtime() }
+        // A hard ceiling: the UI can never sit on 「準備中」 longer than this, whatever happens.
+        mainHandler.postDelayed(startupWatchdog, STARTUP_TOTAL_TIMEOUT_MILLIS)
         DnsStatsRepository.attach(this)
         notifications.ensureChannel()
         notifications.cancelStopped()
@@ -143,7 +176,9 @@ class KuiesVpnService : VpnService() {
         ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting())
 
         connectivity = getSystemService(ConnectivityManager::class.java)
+        val findStartedAt = SystemClock.elapsedRealtime()
         val underlying = UnderlyingNetworkFinder.find(connectivity)
+        logStartupDebug("underlyingNetworkFindMs=${SystemClock.elapsedRealtime() - findStartedAt}")
         if (underlying == null) {
             Log.w(TAG, "No usable non-VPN network for the DoH bootstrap.")
             requestFailOpen(ProtectionError.NO_UNDERLYING_NETWORK)
@@ -151,6 +186,7 @@ class KuiesVpnService : VpnService() {
         }
         underlyingNetwork = underlying.network
         setUnderlyingNetworks(arrayOf(underlying.network))
+        timeline.mark("underlyingReady")
 
         // Validate the transport before creating a tunnel we could not serve.
         val created = createTransport(underlying.dnsServers)
@@ -159,6 +195,7 @@ class KuiesVpnService : VpnService() {
             return
         }
         transport = created
+        timeline.mark("transportReady")
 
         val plan = VpnRoutePlan.DEFAULT
         val problems = VpnRoutePlanPolicy.problemsWith(plan)
@@ -169,7 +206,9 @@ class KuiesVpnService : VpnService() {
         }
         routePlan = plan
 
+        val tunnelStartedAt = SystemClock.elapsedRealtime()
         val descriptor = establishTunnel(plan)
+        logStartupDebug("tunnelEstablishMs=${SystemClock.elapsedRealtime() - tunnelStartedAt}")
         if (descriptor == null) {
             requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
             return
@@ -183,6 +222,7 @@ class KuiesVpnService : VpnService() {
 
         registerUnderlyingNetworkCallback()
         startReaderThread(plan)
+        timeline.mark("tunnelReady")
         verifyDnsRoundTrip()
     }
 
@@ -295,6 +335,12 @@ class KuiesVpnService : VpnService() {
             return
         }
         if (ProtectionStatusHolder.state == ProtectionState.STARTING) {
+            // A network change may earn a fresh retry, but never a fresh deadline.
+            if (startupBudget?.isExhausted() == true) {
+                Log.w(TAG, "Underlying network changed after the startup budget expired.")
+                requestFailOpen(ProtectionError.DNS_TIMEOUT)
+                return
+            }
             probeAttempts = 0
             verifyDnsRoundTrip()
         }
@@ -331,6 +377,16 @@ class KuiesVpnService : VpnService() {
         if (loggedDrops.add(reason)) {
             Log.i(TAG, "Discarding tunnel packets: $reason")
         }
+    }
+
+    /** Debug builds only. Durations and counts, never a name, an address, or query content. */
+    private fun logStartupDebug(message: String) {
+        if (debugLoggingEnabled) Log.d(TAG, message)
+    }
+
+    private fun logStartupSummary() {
+        val timeline = startupTimeline ?: return
+        logStartupDebug("startupTimeline totalMs=${timeline.elapsedMillis()} stages=[${timeline.summary()}]")
     }
 
     private fun dispatch(query: TunnelDnsQuery) {
@@ -418,33 +474,81 @@ class KuiesVpnService : VpnService() {
             requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
             return
         }
-        executor.execute {
-            val result = transport?.exchange(probeQuery())
-            mainHandler.post {
-                if (!running) return@post
-                when (result) {
-                    is DohResult.Success -> {
-                        consecutiveFailures.set(0)
-                        ProtectionStatusHolder.update(ProtectionStateRules.afterDnsVerified())
-                        notifications.updateOngoing(
-                            getString(R.string.notification_active_title),
-                            getString(R.string.notification_active_text)
-                        )
-                        Log.i(TAG, "DNS round trip verified; protection is active.")
-                    }
-                    is DohResult.Failure, null -> {
-                        probeAttempts++
-                        if (probeAttempts >= PROBE_ATTEMPTS) {
-                            val error = (result as? DohResult.Failure)?.failure?.toProtectionError()
-                                ?: ProtectionError.DNS_UNREACHABLE
-                            requestFailOpen(error)
-                        } else {
-                            mainHandler.postDelayed({ verifyDnsRoundTrip() }, PROBE_RETRY_DELAY_MILLIS)
+        if (startupBudget?.isExhausted() == true) {
+            Log.w(TAG, "Startup budget already exhausted before a verification attempt.")
+            requestFailOpen(ProtectionError.DNS_TIMEOUT)
+            return
+        }
+        // A network change can re-trigger verification; never let two probes overlap.
+        if (!verificationInFlight.compareAndSet(false, true)) {
+            logStartupDebug("dnsVerify skipped: a verification is already in flight")
+            return
+        }
+        val attemptNumber = probeAttempts + 1
+        val attemptStartedAt = SystemClock.elapsedRealtime()
+        try {
+            executor.execute {
+                val result = transport?.exchange(probeQuery())
+                val attemptMillis = SystemClock.elapsedRealtime() - attemptStartedAt
+                mainHandler.post {
+                    verificationInFlight.set(false)
+                    if (!running) return@post
+                    logStartupDebug(
+                        "dnsVerify attempt=$attemptNumber durationMs=$attemptMillis result=${describeOutcome(result)}"
+                    )
+                    when (result) {
+                        is DohResult.Success -> {
+                            consecutiveFailures.set(0)
+                            startupTimeline?.mark("dnsVerified")
+                            mainHandler.removeCallbacks(startupWatchdog)
+                            ProtectionStatusHolder.update(ProtectionStateRules.afterDnsVerified())
+                            notifications.updateOngoing(
+                                getString(R.string.notification_active_title),
+                                getString(R.string.notification_active_text)
+                            )
+                            Log.i(TAG, "DNS round trip verified; protection is active.")
+                            logStartupSummary()
+                        }
+                        is DohResult.Failure, null -> {
+                            probeAttempts++
+                            val budgetExhausted = startupBudget?.isExhausted() == true
+                            val giveUp = StartupVerificationPolicy.mustStopRetrying(
+                                probeAttempts,
+                                PROBE_ATTEMPTS,
+                                budgetExhausted
+                            )
+                            if (giveUp) {
+                                val error = (result as? DohResult.Failure)?.failure?.toProtectionError()
+                                    ?: ProtectionError.DNS_UNREACHABLE
+                                logStartupDebug(
+                                    "dnsVerify givingUp attempts=$probeAttempts budgetExhausted=$budgetExhausted"
+                                )
+                                requestFailOpen(error)
+                            } else {
+                                val delay = StartupVerificationPolicy.nextRetryDelayMillis(
+                                    PROBE_RETRY_DELAY_MILLIS,
+                                    startupBudget?.remainingMillis() ?: PROBE_RETRY_DELAY_MILLIS
+                                )
+                                if (delay <= 0L) {
+                                    requestFailOpen(ProtectionError.DNS_TIMEOUT)
+                                } else {
+                                    mainHandler.postDelayed({ verifyDnsRoundTrip() }, delay)
+                                }
+                            }
                         }
                     }
                 }
             }
+        } catch (rejected: RejectedExecutionException) {
+            verificationInFlight.set(false)
         }
+    }
+
+    /** The failure kind only — never the endpoint, an address, or any query content. */
+    private fun describeOutcome(result: DohResult?): String = when (result) {
+        null -> "no_transport"
+        is DohResult.Success -> "ok"
+        is DohResult.Failure -> result.failure.name
     }
 
     private fun probeQuery(): ByteArray = DnsMessageWriter.buildQuery(
@@ -553,6 +657,9 @@ class KuiesVpnService : VpnService() {
         unregisterNetworkCallback()
         underlyingNetwork = null
         probeAttempts = 0
+        startupBudget = null
+        startupTimeline = null
+        verificationInFlight.set(false)
         consecutiveFailures.set(0)
         DnsStatsRepository.persistNow()
     }
@@ -587,6 +694,12 @@ class KuiesVpnService : VpnService() {
         private const val PROBE_ATTEMPTS = 3
         private const val PROBE_EDNS_PAYLOAD = 4096
         private const val PROBE_RETRY_DELAY_MILLIS = 1_500L
+
+        /**
+         * Hard ceiling for one start, from STARTING to a decision. Bounds the wait regardless of
+         * attempts or network flaps; on expiry the service fails open with a timeout.
+         */
+        private const val STARTUP_TOTAL_TIMEOUT_MILLIS = 15_000L
         private const val READER_JOIN_MILLIS = 1_000L
         private const val WORKER_THREADS = 8
         private const val QUEUE_CAPACITY = 256
