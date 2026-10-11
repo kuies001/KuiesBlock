@@ -396,13 +396,23 @@ class KuiesVpnService : VpnService() {
     }
 
     /**
-     * Debug-only drop detail. Each distinct IP version / protocol / port / reason combination is
-     * logged once, so Logcat stays small while still answering whether IPv6 or a TCP retry reaches
-     * the tunnel. Reads the already-captured buffer; it changes no parsing behaviour.
+     * Debug-only drop detail. Each distinct combination is logged once, so Logcat stays small.
+     * Reads the already-captured buffer; it changes no parsing behaviour.
+     *
+     * TEMPORARY (Private DNS investigation): while [LOG_DROP_ENDPOINTS] is true this also records
+     * the source/destination addresses and TCP flags, which is the only way to tell whether port 853
+     * traffic targets our virtual DNS or a public address. Set the flag to false (or delete this
+     * branch) once the routing question is settled. Debug builds only — a release build never logs
+     * an address.
      */
     private fun logDropDetail(reason: PacketDropReason, bytes: ByteArray, length: Int) {
         if (!debugLoggingEnabled) return
-        val detail = DropDiagnostics.describe(reason, bytes, length) ?: return
+        if (loggedDropDetails.size >= MAX_LOGGED_DROP_DETAILS) return
+        val detail = if (LOG_DROP_ENDPOINTS) {
+            DropDiagnostics.describeWithEndpoints(reason, bytes, length)
+        } else {
+            DropDiagnostics.describe(reason, bytes, length)
+        } ?: return
         if (loggedDropDetails.add(detail)) {
             Log.d(TAG, detail)
         }
@@ -733,6 +743,16 @@ class KuiesVpnService : VpnService() {
         private const val WORKER_THREADS = 8
         private const val QUEUE_CAPACITY = 256
         private const val IDLE_THREAD_SECONDS = 30L
+
+        /**
+         * TEMPORARY (Private DNS investigation): include source/destination addresses and TCP flags
+         * in the debug drop log. Flip to false — or delete this and the branch in
+         * [logDropDetail] — once the 853 routing question is settled. Debug builds only.
+         */
+        private const val LOG_DROP_ENDPOINTS = true
+
+        /** Keeps the debug dedup set bounded even if many distinct flows are dropped. */
+        private const val MAX_LOGGED_DROP_DETAILS = 128
 
         @Volatile
         var isRunning: Boolean = false

@@ -89,4 +89,68 @@ class DropDiagnosticsTest {
         val detail = DropDiagnostics.describe(PacketDropReason.NOT_IPV4, packet, 20)
         assertEquals("tunnelDrop ipv6 reason=NOT_IPV4", detail)
     }
+
+    // --- temporary endpoint form (Private DNS investigation) ------------------------------------
+
+    private fun writeIpv4(bytes: ByteArray, offset: Int, a: Int, b: Int, c: Int, d: Int) {
+        bytes[offset] = a.toByte()
+        bytes[offset + 1] = b.toByte()
+        bytes[offset + 2] = c.toByte()
+        bytes[offset + 3] = d.toByte()
+    }
+
+    /** An IPv4 TCP SYN towards the virtual DNS on port 853, as the resolver's DoT would look. */
+    private fun ipv4TcpSynToPort853(): ByteArray {
+        val packet = ByteArray(40)
+        packet[0] = 0x45.toByte() // version 4, IHL 5
+        packet[3] = 40 // total length
+        packet[9] = 6 // TCP
+        writeIpv4(packet, 12, 10, 111, 222, 1) // source
+        writeIpv4(packet, 16, 10, 111, 222, 2) // destination: the virtual DNS
+        packet[20 + 2] = ((853 ushr 8) and 0xFF).toByte()
+        packet[20 + 3] = (853 and 0xFF).toByte()
+        packet[20 + 13] = 0x02 // SYN
+        return packet
+    }
+
+    @Test
+    fun theEndpointFormRevealsWhereTheTcpFlowWasGoing() {
+        val detail = DropDiagnostics.describeWithEndpoints(PacketDropReason.NOT_UDP, ipv4TcpSynToPort853(), 40)
+        assertTrue("detail=$detail", detail!!.contains("proto=6 dstPort=853"))
+        assertTrue("detail=$detail", detail.contains("src=10.111.222.1"))
+        assertTrue("detail=$detail", detail.contains("dst=10.111.222.2"))
+        assertTrue("detail=$detail", detail.contains("flags=SYN"))
+    }
+
+    @Test
+    fun theCoarseFormNeverPrintsAnAddress() {
+        val detail = DropDiagnostics.describe(PacketDropReason.NOT_UDP, ipv4TcpSynToPort853(), 40)
+        assertTrue("detail=$detail", !detail!!.contains("src="))
+        assertTrue("detail=$detail", !detail.contains("dst="))
+        assertTrue("detail=$detail", !detail.contains("10.111.222."))
+    }
+
+    @Test
+    fun theEndpointFormPrintsBothIpv6Addresses() {
+        val packet = ByteArray(40)
+        packet[0] = 0x60.toByte() // version 6
+        packet[6] = 58 // ICMPv6
+        packet[8] = 0xFE.toByte()
+        packet[9] = 0x80.toByte()
+        packet[23] = 1 // fe80::1
+        packet[39] = 0xFF.toByte() // ::ff
+        val detail = DropDiagnostics.describeWithEndpoints(PacketDropReason.NOT_IPV4, packet, 40)
+        assertTrue("detail=$detail", detail!!.contains("ipv6 nextHeader=58"))
+        assertTrue("detail=$detail", detail.contains("src=fe80:0:0:0:0:0:0:1"))
+        assertTrue("detail=$detail", detail.contains("dst=0:0:0:0:0:0:0:ff"))
+    }
+
+    @Test
+    fun tcpFlagsAreUnknownWhenTheFlagsByteWasNotCaptured() {
+        // Length stops before the TCP flags byte: the flags must read "-", never a guess.
+        val packet = ipv4(protocol = 6, destinationPort = 853, totalLength = 30)
+        assertEquals("-", DropDiagnostics.tcpFlags(packet, 30, transportOffset = 20))
+        val detail = DropDiagnostics.describeWithEndpoints(PacketDropReason.NOT_UDP, packet, 30)
+        assertTrue("detail=$detail", detail!!.contains("flags=-"))
+    }
 }
