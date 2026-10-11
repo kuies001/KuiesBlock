@@ -37,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
-import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.data.BlockStats
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConnectionScenario
@@ -200,13 +199,25 @@ private fun ProtectionCard(
                 textAlign = TextAlign.Center
             )
             InterceptionPill(state = state)
+            val actionColorRole = ProtectionPresentation.actionColorRole(
+                ProtectionPresentation.actionTone(state, isServiceRunning)
+            )
             Button(
                 onClick = onToggleProtection,
                 modifier = Modifier.fillMaxWidth(),
-                colors = if (state == ProtectionState.ERROR && isServiceRunning) {
-                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                } else {
-                    ButtonDefaults.buttonColors()
+                colors = when (actionColorRole) {
+                    ProtectionActionColorRole.PRIMARY -> ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                    ProtectionActionColorRole.SECONDARY_CONTAINER -> ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    ProtectionActionColorRole.ERROR_CONTAINER -> ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
                 }
             ) {
                 Text(ProtectionPresentation.primaryActionLabel(state, isServiceRunning))

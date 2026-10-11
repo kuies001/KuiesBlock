@@ -5,6 +5,27 @@ import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 
 /**
+ * How urgent the primary protection button should look.
+ *
+ * A pure function of the protection state (plus whether the service is still running), so every
+ * screen derives the same colour and label from one place. It deliberately depends on nothing else
+ * — no timers, no animation state — so the colour can never lag behind the real VPN state.
+ */
+enum class ProtectionActionTone {
+    /** Turning protection on, or retrying after it stopped: harmless and expected. */
+    ENABLE,
+
+    /** Cancelling a start that is still in progress: reversible, worth a softer notice colour. */
+    CAUTION,
+
+    /** Stopping a tunnel that is intercepting (or failed while still running): the strongest cue. */
+    DANGER
+}
+
+/** The Material 3 colour roles the protection button is allowed to use. */
+enum class ProtectionActionColorRole { PRIMARY, SECONDARY_CONTAINER, ERROR_CONTAINER }
+
+/**
  * Pure mapping from [ProtectionState] to the wording shown on the home screen.
  *
  * 「防護已啟用」 is only ever produced for [ProtectionState.ACTIVE], which the service reaches
@@ -39,6 +60,27 @@ object ProtectionPresentation {
         ProtectionState.ACTIVE, ProtectionState.STARTING -> "停用防護"
         ProtectionState.ERROR -> if (isServiceRunning) "停用防護" else "重試啟用"
         ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE -> "啟用防護"
+    }
+
+    /**
+     * The colour intent behind [primaryActionLabel]. Derived from the same inputs, so the label and
+     * the colour can never disagree: an `ENABLE`/`重試啟用` button is always brand primary, a
+     * cancel-during-start is always the soft notice colour, and a stop is always the soft warning
+     * colour.
+     */
+    fun actionTone(state: ProtectionState, isServiceRunning: Boolean = false): ProtectionActionTone = when (state) {
+        ProtectionState.STARTING -> ProtectionActionTone.CAUTION
+        ProtectionState.ACTIVE -> ProtectionActionTone.DANGER
+        ProtectionState.ERROR ->
+            if (isServiceRunning) ProtectionActionTone.DANGER else ProtectionActionTone.ENABLE
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE -> ProtectionActionTone.ENABLE
+    }
+
+    /** The single Material 3 colour role for a [tone]; the Compose layer only resolves the tokens. */
+    fun actionColorRole(tone: ProtectionActionTone): ProtectionActionColorRole = when (tone) {
+        ProtectionActionTone.ENABLE -> ProtectionActionColorRole.PRIMARY
+        ProtectionActionTone.CAUTION -> ProtectionActionColorRole.SECONDARY_CONTAINER
+        ProtectionActionTone.DANGER -> ProtectionActionColorRole.ERROR_CONTAINER
     }
 
     fun interceptionLabel(state: ProtectionState): String = when {
