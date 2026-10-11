@@ -84,6 +84,7 @@ class KuiesVpnService : VpnService() {
     private val writeLock = Any()
     private val consecutiveFailures = AtomicInteger(0)
     private val loggedDrops = ConcurrentHashMap.newKeySet<PacketDropReason>()
+    private val loggedDropDetails = ConcurrentHashMap.newKeySet<String>()
     private val verificationInFlight = AtomicBoolean(false)
 
     private var startupBudget: StartupBudget? = null
@@ -362,7 +363,10 @@ class KuiesVpnService : VpnService() {
                     if (length < 0) break else continue
                 }
                 when (val outcome = DnsTunnelPacketParser.parse(buffer, length, plan.interceptTarget)) {
-                    is DnsTunnelOutcome.Drop -> logDropOnce(outcome.reason)
+                    is DnsTunnelOutcome.Drop -> {
+                        logDropOnce(outcome.reason)
+                        logDropDetail(outcome.reason, buffer, length)
+                    }
                     is DnsTunnelOutcome.Query -> dispatch(outcome.query)
                 }
             }
@@ -376,6 +380,19 @@ class KuiesVpnService : VpnService() {
     private fun logDropOnce(reason: PacketDropReason) {
         if (loggedDrops.add(reason)) {
             Log.i(TAG, "Discarding tunnel packets: $reason")
+        }
+    }
+
+    /**
+     * Debug-only drop detail. Each distinct IP version / protocol / port / reason combination is
+     * logged once, so Logcat stays small while still answering whether IPv6 or a TCP retry reaches
+     * the tunnel. Reads the already-captured buffer; it changes no parsing behaviour.
+     */
+    private fun logDropDetail(reason: PacketDropReason, bytes: ByteArray, length: Int) {
+        if (!debugLoggingEnabled) return
+        val detail = DropDiagnostics.describe(reason, bytes, length) ?: return
+        if (loggedDropDetails.add(detail)) {
+            Log.d(TAG, detail)
         }
     }
 
