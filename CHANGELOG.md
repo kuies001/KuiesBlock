@@ -2,6 +2,63 @@
 
 本專案遵循語意化版本。以下記錄各版本的實際變更。
 
+## v0.2.2
+
+**主題：實機崩潰修正、VPN 停止機制強化、私人 DNS 相容性分析及防護狀態 UI 升級**
+
+### 修正
+
+- **主線程 Socket 關閉引發 NetworkOnMainThreadException 崩潰（BUG 1 根因）**：
+  - 崩潰反編譯堆疊分析：`ConscryptEngineSocket$SSLOutputStream.writeInternal` <- `ConscryptEngineSocket.close` <- `okhttp3.internal._UtilJvmKt.closeQuietly` (`i61.c`) <- `OkHttpDohTransport.close` (`jd0.close`)。
+  - 當底層網路切換（`onUnderlyingNetworkChanged`）或服務銷毀（`onDestroy`）時，於主線程呼叫 `transport?.close()` 會觸發 OkHttp 連線池 `connectionPool.evictAll()`，Conscrypt 於關閉 TLS Socket 時在主線程向網路寫入 TLS `close_notify` Alert，引發 `android.os.NetworkOnMainThreadException` 致命崩潰。
+  - 修復方式：
+    1. `OkHttpDohTransport.close()` 內建主線程檢測與安全非同步隔離，若在主 Looper 觸發則透過專用背景線程執行 `connectionPool.evictAll()`。
+    2. `KuiesVpnService` 於網路重建與生命週期銷毀（`teardown`）時，全面將舊 Transport 關閉與線程清理卸載至背景，避免阻塞主線程或引發網路例外。
+- **VPN 啟用後無法停用與狀態卡死（BUG 2 根因）**：
+  - 既有實作僅依賴 `context.stopService()`，且 `onStartCommand` 回傳 `START_STICKY` 且缺乏明確的 `ACTION_STOP` 處理；若在 `STARTING` 探測重試（`verifyDnsRoundTrip` 延遲任務）期間停止，主線程未移除 pending callbacks，導致定時器觸發與狀態競態。
+  - 修復方式：
+    1. 實作明確的停止 Intent（`ACTION_STOP = "tw.kuies.block.action.VPN_STOP"`）與前台通知的「停用防護」Action 按鈕。
+    2. 停止時立即清除 `mainHandler` 上的所有待執行任務（中斷 DNS 探測重試），設置 `running = false` 與 `isRunning = false`。
+    3. `teardown()` 確保 TUN 介面關閉、Worker 線程池 `shutdownNow()`、Socket 於背景關閉、前台通知移除（`stopForeground(STOP_FOREGROUND_REMOVE)`）。
+    4. `onStartCommand` 改為回傳 `START_NOT_STICKY`，防止服務被系統意外重啟。
+    5. UI 按鈕在 `STARTING`、`ACTIVE`、`ERROR` 均支援立即停用，並同步重設狀態為 `AUTHORIZED_IDLE`（防護已停用）。
+
+### 私人 DNS 相容性（BUG 3 分析與引導）
+
+- **Android 私人 DNS 與 KuiesBlock 的互動**：
+  - Android 啟用私人 DNS（指定主機名稱 `dns.kuies.tw`）時，系統解析器會透過 DoT（TCP 853）對外連線。KuiesBlock 僅攔截虛擬 DNS 位址（`10.111.222.2/32`），若系統或應用程式產生 TCP 查詢或探測，KuiesBlock 的 UDP-only 解析器會記錄 `NOT_UDP` 並安全丟棄。
+  - 當系統或 App 產生 IPv6 查詢或探測時，`Ipv4Parser` 記錄 `NOT_IPV4` 並安全丟棄。
+  - `::/0 unreachable` 為 Android 檢測 VPN 網路介面是否具備 IPv6 預設路由時的正常回報；KuiesBlock 僅接管指定 IPv4 /32 DNS 路由，底層實體網路（Wi-Fi 或行動網路）的 IPv6 與一般連線完全正常不受影響。
+  - AdGuard Home 阻擋廣告時（回傳 `NXDOMAIN` 或 `0.0.0.0`），KuiesBlock 解析為合法的 DNS 回應（`isBlocked=true` 為 AdGuard Home 特性），不會誤判為網路異常或觸發 fail-open。
+  - 首頁新增「已啟用私人 DNS（指定主機名稱）」引導卡片，友善提醒系統 DoT 可能優先處理部分查詢，並提供調整建議。
+
+### 介面
+
+- **防護狀態視覺層級更新（完整適配淺色與深色模式）**：
+  - **未啟用**（`NOT_AUTHORIZED` / `AUTHORIZED_IDLE`）：灰階停用盾牌（`ic_shield_off`，`surfaceVariant` 底色），狀態標題「防護已停用」，主按鈕「啟用防護」。
+  - **啟動中**（`STARTING`）：柔和橘色盾牌（`secondaryContainer` 底色），帶有旋轉進度指示器（`CircularProgressIndicator`），狀態標題「正在啟用防護」，主按鈕「停用防護」。
+  - **已啟用**（`ACTIVE`）：品牌青綠色打勾盾牌（`ic_shield`，`primaryContainer` 底色），狀態標題「防護已啟用」，主按鈕「停用防護」。
+  - **異常**（`ERROR`）：柔和紅色警告盾牌（`ic_shield_alert`，`errorContainer` 底色），狀態標題「防護異常」，次要文字清楚標示具體錯誤原因，主按鈕提供「重試啟用」或若殘留運行提供「停用防護」。
+
+### 測試
+
+- 單元測試由 127 個增加至 **136 個**（原有 127 個全數維持通過，新增 9 個測試）。
+- 新增涵蓋：
+  - `OkHttpDohTransport.close()` 冪等性與安全性測試。
+  - `KuiesVpnService.ACTION_STOP` 明確停止 Intent 與前台通知 Action 驗證。
+  - `STARTING` 狀態取消即時過渡測試。
+  - `ACTIVE` 狀態停止過渡測試。
+  - `ERROR` 狀態停止與重試過渡測試。
+  - 重複停止與重複啟動冪等性測試。
+  - 私人 DNS 指定模式（`isStrictHostname`）辨識測試。
+  - 狀態標題（「防護已停用」、「正在啟用防護」、「防護已啟用」、「防護異常」）規範測試。
+
+### 變更
+
+- `versionName` → `0.2.2`，`versionCode` → `4`。
+
+---
+
 ## v0.2.1
 
 **主題：修正私人 DNS 誤判為連線異常，並停止在介面顯示自架 DNS 伺服器 IP**
