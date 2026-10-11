@@ -1,0 +1,45 @@
+# === 建置產物（一律不追蹤）===
+*.apk
+*.aab
+*.ap_
+build/
+/app/build/
+
+# === Gradle / Kotlin ===
+.gradle
+.kotlin
+
+# === 本機設定（含 SDK 路徑）===
+local.properties
+
+# === IDE / Android Studio / IntelliJ ===
+.idea/
+*.iml
+*.ipr
+*.iws
+captures/
+
+# === Native 建置中介檔 ===
+.externalNativeBuild
+.cxx
+
+# === 簽章素材與私鑰：絕對不可提交 ===
+*.jks
+*.keystore
+*.p12
+*.pem
+*.pepk
+
+# === 機密與環境設定 ===
+.env
+.env.*
+secrets.properties
+
+# === 記錄檔、暫存檔 ===
+*.log
+*.hprof
+*.tmp
+
+# === 作業系統 ===
+.DS_Store
+Thumbs.db

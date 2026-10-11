@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 (API 30) and below use this full-backup policy. Keep in sync with data_extraction_rules.xml. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="kuies_block_settings.xml" />
+    <exclude domain="sharedpref" path="kuies_block_dns.xml" />
+</full-backup-content>

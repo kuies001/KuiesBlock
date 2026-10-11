@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is disabled everywhere except the loopback interface, which is
+  only used by development tooling. KuiesBlock itself never performs cleartext
+  network requests, so a DNS endpoint can never be silently downgraded to a
+  plaintext transport by the HTTP stack.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

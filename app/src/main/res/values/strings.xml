@@ -1,0 +1,59 @@
+<resources>
+    <string name="app_name">KuiesBlock</string>
+    <string name="app_tagline">輕量攔截廣告，不再被打擾</string>
+    <string name="vpn_service_label">KuiesBlock 防護</string>
+
+    <string name="notification_channel_name">防護狀態</string>
+    <string name="notification_channel_description">顯示 KuiesBlock 本機 VPN 的運作狀態</string>
+    <string name="notification_starting_title">正在啟動 KuiesBlock 防護</string>
+    <string name="notification_starting_text">正在建立本機 VPN 並確認 DNS 往返正常，尚未開始攔截。</string>
+    <string name="notification_active_title">KuiesBlock 防護已啟用</string>
+    <string name="notification_active_text">系統 DNS 查詢正透過加密的 DoH 送往 dns.kuies.tw，一般流量不受影響。</string>
+    <string name="notification_stopped_title">KuiesBlock 防護已停止</string>
+    <string name="notification_stopped_text">DNS 無法正常運作（%1$s），已停止防護並恢復正常網路。</string>
+
+    <string name="protection_error_tun">無法建立本機 VPN 介面</string>
+    <string name="protection_error_network">找不到可用的網路</string>
+    <string name="protection_error_endpoint">DNS 傳輸設定無效</string>
+    <string name="protection_error_unreachable">無法連線到 dns.kuies.tw</string>
+    <string name="protection_error_timeout">DNS 查詢逾時</string>
+    <string name="protection_error_tls">TLS 憑證驗證失敗</string>
+    <string name="protection_error_response">DNS 回應格式錯誤</string>
+
+    <string name="home_privacy_note">KuiesBlock 不收集個人資料，設定與統計只儲存在這台裝置。本機 VPN 不會把你的流量轉送到任何遠端伺服器。</string>
+    <string name="home_queries_today">今日 DNS 查詢次數</string>
+    <string name="home_queries_caption">由本機 DNS 攔截實際處理的查詢</string>
+    <string name="home_blocked_today">今日廣告攔截次數</string>
+    <string name="home_blocked_no_data">無法從 DoH 準確得知攔截數</string>
+    <string name="home_dns_status">DNS 連線狀態</string>
+    <string name="home_private_dns_warning">私人 DNS 已開啟，Android 可能改用其他加密 DNS，攔截會被略過（DNS 仍正常）。</string>
+    <string name="action_open_settings">開啟設定</string>
+    <string name="action_recheck_dns">重新檢查 DNS 連線</string>
+    <string name="value_no_data">尚無資料</string>
+
+    <string name="action_back">返回</string>
+    <string name="settings_title">設定</string>
+    <string name="settings_dns_section">DNS 設定</string>
+    <string name="settings_dns_host_label">DNS 主機</string>
+    <string name="settings_dns_endpoint_label">DoH 端點</string>
+    <string name="settings_dns_protocol_label">傳輸方式</string>
+    <string name="settings_dns_protocol_note">此版本只實作 DoH；選擇其他傳輸方式不會啟動防護。KuiesBlock 不會把加密 DNS 靜默降級成明文查詢。</string>
+    <string name="settings_private_dns_label">Android 私人 DNS</string>
+    <string name="settings_private_dns_warning">私人 DNS 設定為「自動」或指定主機名稱時，Android 可能繞過 KuiesBlock 提供的 DNS；此時 DNS 仍可運作，但不會經過攔截。</string>
+    <string name="settings_scope_note">攔截範圍：僅 IPv4 UDP DNS。DNS-over-TCP 與 IPv6 的 DNS 不會被攔截。</string>
+    <string name="action_run_dns_diagnostics">執行 DNS 診斷</string>
+    <string name="settings_diagnostic_result">診斷結果</string>
+    <string name="settings_diagnostic_resolved">解析位址</string>
+    <string name="settings_diagnostic_resolution_failed">名稱解析失敗：%1$s</string>
+    <string name="settings_diagnostic_no_probe">沒有可用的傳輸連接埠可以測試。</string>
+    <string name="settings_diagnostic_probe">• %1$s：%2$s</string>
+    <string name="settings_diagnostic_certificate">TLS 憑證主體：%1$s</string>
+    <string name="settings_stats_section">統計</string>
+    <string name="settings_stats_queries">今日 DNS 查詢：%1$d</string>
+    <string name="settings_stats_failed">今日 DNS 失敗：%1$d</string>
+    <string name="settings_stats_blocked">今日廣告攔截：尚無資料</string>
+    <string name="settings_privacy_section">隱私</string>
+    <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。</string>
+    <string name="settings_about_section">關於</string>
+    <string name="settings_about_version">App 版本</string>
+</resources>
