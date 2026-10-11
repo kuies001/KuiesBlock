@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 import tw.kuies.block.R
+import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
@@ -44,6 +45,7 @@ import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.dns.DnsConfig
 import tw.kuies.block.dns.DnsConfigStore
 import tw.kuies.block.dns.DnsProtocol
+import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.dns.message.DnsMessageReader
 import tw.kuies.block.dns.message.DnsMessageWriter
 import tw.kuies.block.dns.packet.DnsReplyPolicy
@@ -88,6 +90,9 @@ class KuiesVpnService : VpnService() {
     private val loggedDrops = ConcurrentHashMap.newKeySet<PacketDropReason>()
     private val loggedDropDetails = ConcurrentHashMap.newKeySet<String>()
     private val verificationInFlight = AtomicBoolean(false)
+
+    /** Which DNS path this run actually installed; reported to the UI so it never overclaims. */
+    private var activeDnsPath: DnsPath = DnsPath.INTERCEPTED
 
     private var startupBudget: StartupBudget? = null
     private var startupTimeline: StartupTimeline? = null
@@ -209,9 +214,10 @@ class KuiesVpnService : VpnService() {
         }
         routePlan = plan
 
-        // One place only decides the experiment configuration; nothing else branches on the mode.
-        val experimentMode = DnsExperiment.mode(this)
-        logStartupDebug("dnsExperimentMode=${experimentMode.name}")
+        // One place only decides the tunnel configuration; nothing else branches on the mode.
+        val strictPrivateDns = PrivateDnsSettings.read(this).isStrictHostname
+        val experimentMode = DnsExperiment.mode(this, strictPrivateDns)
+        logStartupDebug("dnsExperimentMode=${experimentMode.name} strictPrivateDns=$strictPrivateDns")
         if (experimentMode == DnsExperimentMode.E1_REAL_DOT_ADDRESS) {
             // E1 needs the real DoT address, and the bootstrap blocks: resolve off the main thread.
             resolveRealDotAddress(underlying.dnsServers, plan, timeline)
@@ -284,6 +290,13 @@ class KuiesVpnService : VpnService() {
         tunnel = descriptor
         tunnelInput = FileInputStream(descriptor.fileDescriptor)
         tunnelOutput = FileOutputStream(descriptor.fileDescriptor)
+        // Only declaring our own virtual DNS means queries will actually reach the tunnel; anything
+        // else is the strict Private DNS case where the system keeps the resolution path.
+        activeDnsPath = if (declaration.dnsServer == plan.dnsServerAddress) {
+            DnsPath.INTERCEPTED
+        } else {
+            DnsPath.SYSTEM_PRIVATE_DNS
+        }
         workers = newWorkerPool()
         // Re-assert the underlying network now that the tunnel exists.
         underlyingNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
@@ -608,12 +621,19 @@ class KuiesVpnService : VpnService() {
                             consecutiveFailures.set(0)
                             startupTimeline?.mark("dnsVerified")
                             mainHandler.removeCallbacks(startupWatchdog)
-                            ProtectionStatusHolder.update(ProtectionStateRules.afterDnsVerified())
+                            ProtectionStatusHolder.update(
+                                ProtectionStateRules.afterDnsVerified(),
+                                null,
+                                activeDnsPath
+                            )
                             notifications.updateOngoing(
                                 getString(R.string.notification_active_title),
                                 getString(R.string.notification_active_text)
                             )
-                            Log.i(TAG, "DNS round trip verified; protection is active.")
+                            Log.i(
+                                TAG,
+                                "DNS round trip verified; protection is active (dnsPath=${activeDnsPath.name})."
+                            )
                             logStartupSummary()
                         }
                         is DohResult.Failure, null -> {
@@ -714,7 +734,7 @@ class KuiesVpnService : VpnService() {
         } else {
             ProtectionStateRules.afterServiceStopped()
         }
-        ProtectionStatusHolder.update(finalState, stopError)
+        ProtectionStatusHolder.update(finalState, stopError, activeDnsPath)
         stopState = null
         stopError = null
         isRunning = false
@@ -813,11 +833,11 @@ class KuiesVpnService : VpnService() {
         private const val IDLE_THREAD_SECONDS = 30L
 
         /**
-         * TEMPORARY (Private DNS investigation): include source/destination addresses and TCP flags
-         * in the debug drop log. Flip to false — or delete this and the branch in
-         * [logDropDetail] — once the 853 routing question is settled. Debug builds only.
+         * The Private-DNS investigation is finished, so the address-bearing drop detail and the
+         * E1 address log are switched off. They were debug-only anyway; this keeps even a debug
+         * build from writing addresses by default.
          */
-        private const val LOG_DROP_ENDPOINTS = true
+        private const val LOG_DROP_ENDPOINTS = false
 
         /** Keeps the debug dedup set bounded even if many distinct flows are dropped. */
         private const val MAX_LOGGED_DROP_DETAILS = 128

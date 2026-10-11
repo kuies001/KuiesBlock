@@ -35,6 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
+import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.data.BlockStats
@@ -53,6 +54,7 @@ fun HomeScreen(
     dnsChecking: Boolean,
     privateDnsState: PrivateDnsState = PrivateDnsState.UNKNOWN,
     isServiceRunning: Boolean = false,
+    dnsPath: DnsPath = DnsPath.INTERCEPTED,
     onToggleProtection: () -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -72,6 +74,7 @@ fun HomeScreen(
             state = protectionState,
             error = protectionError,
             isServiceRunning = isServiceRunning,
+            dnsPath = dnsPath,
             onToggleProtection = onToggleProtection
         )
 
@@ -130,6 +133,7 @@ private fun ProtectionCard(
     state: ProtectionState,
     error: ProtectionError?,
     isServiceRunning: Boolean,
+    dnsPath: DnsPath,
     onToggleProtection: () -> Unit
 ) {
     val containerColor = when (state) {
@@ -193,12 +197,12 @@ private fun ProtectionCard(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = ProtectionPresentation.description(state, error),
+                text = ProtectionPresentation.description(state, error, dnsPath),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-            InterceptionPill(state = state)
+            InterceptionPill(state = state, dnsPath = dnsPath)
             val actionColorRole = ProtectionPresentation.actionColorRole(
                 ProtectionPresentation.actionTone(state, isServiceRunning)
             )
@@ -227,7 +231,7 @@ private fun ProtectionCard(
 }
 
 @Composable
-private fun InterceptionPill(state: ProtectionState) {
+private fun InterceptionPill(state: ProtectionState, dnsPath: DnsPath) {
     val (container, content) = when (state) {
         ProtectionState.ACTIVE -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.primary
         ProtectionState.STARTING -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.secondary
@@ -243,10 +247,13 @@ private fun InterceptionPill(state: ProtectionState) {
         ) {
             Icon(
                 painter = painterResource(
-                    when (state) {
-                        ProtectionState.ACTIVE -> R.drawable.ic_check_circle
-                        ProtectionState.STARTING -> R.drawable.ic_refresh
-                        ProtectionState.ERROR -> R.drawable.ic_warning
+                    when {
+                        // An active tunnel that is not intercepting must not show a check mark.
+                        state == ProtectionState.ACTIVE && dnsPath == DnsPath.SYSTEM_PRIVATE_DNS ->
+                            R.drawable.ic_info
+                        state == ProtectionState.ACTIVE -> R.drawable.ic_check_circle
+                        state == ProtectionState.STARTING -> R.drawable.ic_refresh
+                        state == ProtectionState.ERROR -> R.drawable.ic_warning
                         else -> R.drawable.ic_block
                     }
                 ),
@@ -254,7 +261,7 @@ private fun InterceptionPill(state: ProtectionState) {
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = ProtectionPresentation.interceptionLabel(state),
+                text = ProtectionPresentation.interceptionLabel(state, dnsPath),
                 style = MaterialTheme.typography.bodySmall
             )
         }

@@ -15,8 +15,8 @@
     <string name="action_cancel_starting">取消啟用</string>
     <string name="action_enable_protection">啟用防護</string>
     <string name="action_retry_protection">重試啟用</string>
-    <string name="home_private_dns_hostname_title">系統已啟用私人 DNS</string>
-    <string name="home_private_dns_hostname_notice">目前系統已啟用私人 DNS（指定主機名稱）。系統將優先透過 DoT (連接埠 853) 加密傳輸，部分 DNS 查詢可能繞過 KuiesBlock 隧道。若欲完整使用 KuiesBlock 攔截與統計，建議至系統設定將私人 DNS 改為「自動」或「關閉」。</string>
+    <string name="home_private_dns_hostname_title">系統私人 DNS 指定主機名稱</string>
+    <string name="home_private_dns_hostname_notice">這個模式較嚴格：KuiesBlock 會保留 VPN，但由系統自己對 dns.kuies.tw 進行加密解析，KuiesBlock 不攔截查詢，查詢統計因此為「無資料」。廣告過濾仍由同一個 AdGuard Home 提供。</string>
 
     <string name="protection_error_tun">無法建立本機 VPN 介面</string>
     <string name="protection_error_network">找不到可用的網路</string>

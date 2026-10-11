@@ -122,22 +122,48 @@ class DnsExperimentTest {
     // --- Release can never run an experiment ---------------------------------------------------
 
     @Test
-    fun aReleaseBuildCanNeverLeaveBaseline() {
+    fun aReleaseBuildAlwaysFollowsTheCoexistenceRule() {
+        // Nothing that can be stored may change a release build; only strict Private DNS does.
         for (stored in listOf(null, "baseline", "e2", "e1", "E2", "garbage", "")) {
             assertEquals(
                 "stored=$stored",
                 DnsExperimentMode.BASELINE,
-                DnsExperiment.effectiveMode(isDebuggable = false, storedRaw = stored)
+                DnsExperiment.effectiveMode(isDebuggable = false, storedRaw = stored, strictPrivateDns = false)
+            )
+            assertEquals(
+                "stored=$stored strict",
+                DnsExperimentMode.E2_NO_DNS_DECLARATION,
+                DnsExperiment.effectiveMode(isDebuggable = false, storedRaw = stored, strictPrivateDns = true)
             )
         }
     }
 
     @Test
-    fun aDebugBuildHonoursTheStoredMode() {
-        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(true, null))
-        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(true, "baseline"))
-        assertEquals(DnsExperimentMode.E2_NO_DNS_DECLARATION, DnsExperiment.effectiveMode(true, "e2"))
-        assertEquals(DnsExperimentMode.E1_REAL_DOT_ADDRESS, DnsExperiment.effectiveMode(true, "e1"))
+    fun strictPrivateDnsIsTheOnlyModeThatStepsAside() {
+        assertEquals(
+            DnsExperimentMode.E2_NO_DNS_DECLARATION,
+            DnsExperiment.effectiveMode(true, null, strictPrivateDns = true)
+        )
+        // Off and automatic keep the intercepting configuration.
+        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(true, null, strictPrivateDns = false))
+        assertEquals(DnsExperimentMode.BASELINE, DnsExperiment.effectiveMode(false, null, strictPrivateDns = false))
+    }
+
+    @Test
+    fun aDebugBuildMayOverrideTheRuleToReproduceTheBrokenCase() {
+        // Forcing BASELINE while strict is exactly how the original failure is reproduced.
+        assertEquals(
+            DnsExperimentMode.BASELINE,
+            DnsExperiment.effectiveMode(true, "baseline", strictPrivateDns = true)
+        )
+        assertEquals(
+            DnsExperimentMode.E2_NO_DNS_DECLARATION,
+            DnsExperiment.effectiveMode(true, "e2", strictPrivateDns = false)
+        )
+        assertEquals(
+            DnsExperimentMode.E1_REAL_DOT_ADDRESS,
+            DnsExperiment.effectiveMode(true, "e1", strictPrivateDns = false)
+        )
     }
 
     @Test

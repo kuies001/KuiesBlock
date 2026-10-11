@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
@@ -190,9 +191,13 @@ fun KuiesBlockApp(
 
     val protectionState = ProtectionStatusHolder.state
     val protectionError = ProtectionStatusHolder.error
+    val dnsPath = ProtectionStatusHolder.dnsPath
     val blockStats = DnsStatsRepository.today
     val dnsStatus = when {
         dnsChecking -> DnsCheckStatus.CHECKING
+        // In the strict Private DNS case our tunnel is not the resolver, so never assert OK for it;
+        // fall back to the measured diagnostic report instead.
+        protectionState == ProtectionState.ACTIVE && dnsPath == DnsPath.SYSTEM_PRIVATE_DNS -> dnsReport.status
         ProtectionStateRules.isInterceptionActive(protectionState) -> DnsCheckStatus.OK
         protectionState == ProtectionState.ERROR -> DnsCheckStatus.ERROR
         else -> dnsReport.status
@@ -210,6 +215,7 @@ fun KuiesBlockApp(
             dnsChecking = dnsChecking,
             privateDnsState = privateDns,
             isServiceRunning = KuiesVpnService.isRunning,
+            dnsPath = dnsPath,
             onToggleProtection = { onToggleProtection() },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onOpenSettings = { destination = BlockDestination.SETTINGS },

@@ -19,8 +19,20 @@ object ProtectionStatusHolder {
     var error: ProtectionError? by mutableStateOf(null)
         private set
 
-    fun update(newState: ProtectionState, errorReason: ProtectionError? = null) {
+    /**
+     * Which DNS path is actually in use. Defaults to interception, so the baseline path and every
+     * existing caller are unchanged; only the strict Private DNS start reports the other value.
+     */
+    var dnsPath: DnsPath by mutableStateOf(DnsPath.INTERCEPTED)
+        private set
+
+    fun update(
+        newState: ProtectionState,
+        errorReason: ProtectionError? = null,
+        path: DnsPath = DnsPath.INTERCEPTED
+    ) {
         state = newState
         error = errorReason
+        dnsPath = path
     }
 }

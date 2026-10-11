@@ -3,6 +3,7 @@ package tw.kuies.block
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
@@ -61,6 +62,48 @@ class ProtectionPresentationTest {
     fun everyProtectionErrorHasALabel() {
         ProtectionError.entries.forEach { error ->
             assertTrue("$error has no label", ProtectionPresentation.errorLabel(error).isNotBlank())
+        }
+    }
+
+    // --- strict Private DNS: the tunnel is up but KuiesBlock is not intercepting ----------------
+
+    @Test
+    fun anActiveTunnelThatDelegatesToPrivateDnsNeverClaimsInterception() {
+        val path = DnsPath.SYSTEM_PRIVATE_DNS
+        val label = ProtectionPresentation.interceptionLabel(ProtectionState.ACTIVE, path)
+        val description = ProtectionPresentation.description(ProtectionState.ACTIVE, null, path)
+
+        assertTrue("label=$label", label.contains("未攔截"))
+        assertTrue("label=$label", !label.contains("攔截中"))
+        assertTrue("description=$description", description.contains("系統私人 DNS"))
+        assertTrue("description=$description", description.contains("無資料"))
+        assertTrue("description=$description", !description.contains("已透過加密的 DoH"))
+    }
+
+    @Test
+    fun theInterceptionClaimRequiresBothTheActiveStateAndTheInterceptingPath() {
+        for (state in ProtectionState.entries) {
+            for (path in DnsPath.entries) {
+                val label = ProtectionPresentation.interceptionLabel(state, path)
+                val expected = state == ProtectionState.ACTIVE && path == DnsPath.INTERCEPTED
+                assertEquals("state=$state path=$path label=$label", expected, label == "DNS 攔截中")
+            }
+        }
+    }
+
+    @Test
+    fun theDefaultPathKeepsEveryExistingStringUnchanged() {
+        ProtectionState.entries.forEach { state ->
+            assertEquals(
+                "state=$state",
+                ProtectionPresentation.description(state, null),
+                ProtectionPresentation.description(state, null, DnsPath.INTERCEPTED)
+            )
+            assertEquals(
+                "state=$state",
+                ProtectionPresentation.interceptionLabel(state),
+                ProtectionPresentation.interceptionLabel(state, DnsPath.INTERCEPTED)
+            )
         }
     }
 }

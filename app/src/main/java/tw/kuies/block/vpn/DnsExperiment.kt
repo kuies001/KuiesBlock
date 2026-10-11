@@ -28,8 +28,10 @@ enum class DnsExperimentMode(val storageKey: String) {
     companion object {
         val DEFAULT = BASELINE
 
-        fun fromStorageKey(key: String?): DnsExperimentMode =
-            entries.firstOrNull { it.storageKey.equals(key?.trim(), ignoreCase = true) } ?: DEFAULT
+        fun fromStorageKeyOrNull(key: String?): DnsExperimentMode? =
+            entries.firstOrNull { it.storageKey.equals(key?.trim(), ignoreCase = true) }
+
+        fun fromStorageKey(key: String?): DnsExperimentMode = fromStorageKeyOrNull(key) ?: DEFAULT
     }
 }
 
@@ -116,12 +118,29 @@ object DnsExperiment {
     fun isDebuggable(context: Context): Boolean =
         (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-    /** Pure form of [mode]: a non-debuggable build can never leave [DnsExperimentMode.BASELINE]. */
-    fun effectiveMode(isDebuggable: Boolean, storedRaw: String?): DnsExperimentMode =
-        if (isDebuggable) DnsExperimentMode.fromStorageKey(storedRaw) else DnsExperimentMode.DEFAULT
+    /** Pure form of [mode]: a non-debuggable build can never escape the coexistence rule below. */
+    fun effectiveMode(
+        isDebuggable: Boolean,
+        storedRaw: String?,
+        strictPrivateDns: Boolean
+    ): DnsExperimentMode {
+        val coexistenceDefault =
+            if (strictPrivateDns) DnsExperimentMode.E2_NO_DNS_DECLARATION else DnsExperimentMode.BASELINE
+        if (!isDebuggable) return coexistenceDefault
+        return DnsExperimentMode.fromStorageKeyOrNull(storedRaw) ?: coexistenceDefault
+    }
 
-    fun mode(context: Context): DnsExperimentMode =
-        effectiveMode(isDebuggable(context), readRaw(context))
+    /**
+     * The configuration actually used for this start.
+     *
+     * The shipped rule is that only strict Private DNS steps aside: there the tunnel must not declare
+     * a DNS server, because the system resolver would then open DoT to our own address and nothing
+     * could answer it. Every other mode keeps the intercepting BASELINE. A debug build may override
+     * the rule through [setMode] to reproduce the broken case or to run the E1 experiment; a release
+     * build never can.
+     */
+    fun mode(context: Context, strictPrivateDns: Boolean): DnsExperimentMode =
+        effectiveMode(isDebuggable(context), readRaw(context), strictPrivateDns)
 
     /** Debug only. The debug source set's receiver is the only caller. */
     fun setMode(context: Context, mode: DnsExperimentMode) {

@@ -1,5 +1,6 @@
 package tw.kuies.block.ui
 
+import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
@@ -42,15 +43,25 @@ object ProtectionPresentation {
         ProtectionState.ERROR -> "防護異常"
     }
 
-    fun description(state: ProtectionState, error: ProtectionError?): String = when (state) {
+    fun description(
+        state: ProtectionState,
+        error: ProtectionError?,
+        dnsPath: DnsPath = DnsPath.INTERCEPTED
+    ): String = when (state) {
         ProtectionState.NOT_AUTHORIZED ->
             "需要授權本機 VPN，KuiesBlock 才能接管系統 DNS 查詢。"
         ProtectionState.AUTHORIZED_IDLE ->
             "已取得 VPN 授權。啟動防護後，系統 DNS 查詢會加密送往 dns.kuies.tw。"
         ProtectionState.STARTING ->
             "正在建立本機 VPN 並確認 DNS 往返正常，尚未開始攔截。"
-        ProtectionState.ACTIVE ->
+        ProtectionState.ACTIVE -> if (dnsPath == DnsPath.SYSTEM_PRIVATE_DNS) {
+            // Strict Private DNS keeps the encrypted path for itself, so say so instead of implying
+            // that an active tunnel means intercepted queries.
+            "系統私人 DNS 已接管加密解析：VPN 仍運作，但 KuiesBlock 未攔截查詢，因此查詢統計為「無資料」；" +
+                "過濾仍由 dns.kuies.tw 提供。"
+        } else {
             "系統 DNS 查詢已透過加密的 DoH 送往 dns.kuies.tw，一般網路流量不受影響。"
+        }
         ProtectionState.ERROR ->
             "DNS 無法正常運作，已停止防護並恢復正常網路。" +
                 (error?.let { "（${errorLabel(it)}）" } ?: "")
@@ -83,7 +94,14 @@ object ProtectionPresentation {
         ProtectionActionTone.DANGER -> ProtectionActionColorRole.ERROR_CONTAINER
     }
 
-    fun interceptionLabel(state: ProtectionState): String = when {
+    fun interceptionLabel(
+        state: ProtectionState,
+        dnsPath: DnsPath = DnsPath.INTERCEPTED
+    ): String = when {
+        // The tunnel is up but the system Private DNS is the path that resolves names: never say
+        // 「攔截中」 for that, or the pill would overclaim.
+        state == ProtectionState.ACTIVE && dnsPath == DnsPath.SYSTEM_PRIVATE_DNS ->
+            "未攔截（系統私人 DNS）"
         ProtectionStateRules.isInterceptionActive(state) -> "DNS 攔截中"
         state == ProtectionState.STARTING -> "準備中"
         state == ProtectionState.ERROR -> "防護異常"
