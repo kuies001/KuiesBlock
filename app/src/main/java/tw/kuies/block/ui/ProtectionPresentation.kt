@@ -14,11 +14,11 @@ import tw.kuies.block.core.ProtectionStateRules
 object ProtectionPresentation {
 
     fun title(state: ProtectionState): String = when (state) {
-        ProtectionState.NOT_AUTHORIZED -> "防護尚未啟用"
-        ProtectionState.AUTHORIZED_IDLE -> "已授權，尚未啟動"
-        ProtectionState.STARTING -> "正在啟動防護…"
+        ProtectionState.NOT_AUTHORIZED,
+        ProtectionState.AUTHORIZED_IDLE -> "防護已停用"
+        ProtectionState.STARTING -> "正在啟用防護"
         ProtectionState.ACTIVE -> "防護已啟用"
-        ProtectionState.ERROR -> "防護已停止"
+        ProtectionState.ERROR -> "防護異常"
     }
 
     fun description(state: ProtectionState, error: ProtectionError?): String = when (state) {
@@ -35,17 +35,16 @@ object ProtectionPresentation {
                 (error?.let { "（${errorLabel(it)}）" } ?: "")
     }
 
-    fun primaryActionLabel(state: ProtectionState): String =
-        if (state == ProtectionState.ACTIVE || state == ProtectionState.STARTING) {
-            "停用防護"
-        } else {
-            "啟用防護"
-        }
+    fun primaryActionLabel(state: ProtectionState, isServiceRunning: Boolean = false): String = when (state) {
+        ProtectionState.ACTIVE, ProtectionState.STARTING -> "停用防護"
+        ProtectionState.ERROR -> if (isServiceRunning) "停用防護" else "重試啟用"
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE -> "啟用防護"
+    }
 
     fun interceptionLabel(state: ProtectionState): String = when {
         ProtectionStateRules.isInterceptionActive(state) -> "DNS 攔截中"
         state == ProtectionState.STARTING -> "準備中"
-        state == ProtectionState.ERROR -> "已停止"
+        state == ProtectionState.ERROR -> "防護異常"
         else -> "尚未攔截"
     }
 

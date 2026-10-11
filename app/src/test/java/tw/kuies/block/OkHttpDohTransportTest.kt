@@ -243,4 +243,16 @@ class OkHttpDohTransportTest {
         assertTrue(transport.exchange(query(11)) is DohResult.Success)
         assertTrue("expected the upstream socket to be protected", protectedSockets >= 1)
     }
+
+    @Test
+    fun closeIsIdempotentAndSafe() {
+        val server = startServer()
+        server.enqueue(dnsMessageResponse(responseEchoing(42)))
+        val transport = transportFor(server)
+
+        assertTrue(transport.exchange(query(42)) is DohResult.Success)
+        // Closing multiple times should not throw
+        transport.close()
+        transport.close()
+    }
 }

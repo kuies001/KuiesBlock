@@ -27,7 +27,14 @@ class VpnNotifications(private val service: Service) {
     }
 
     fun buildOngoing(title: String, text: String): Notification =
-        builder(title, text).setOngoing(true).build()
+        builder(title, text)
+            .setOngoing(true)
+            .addAction(
+                R.drawable.ic_shield_off,
+                service.getString(R.string.action_stop_protection),
+                stopPendingIntent()
+            )
+            .build()
 
     fun updateOngoing(title: String, text: String) {
         val manager = service.getSystemService(NotificationManager::class.java) ?: return
@@ -59,6 +66,13 @@ class VpnNotifications(private val service: Service) {
         service,
         0,
         Intent(service, MainActivity::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun stopPendingIntent(): PendingIntent = PendingIntent.getService(
+        service,
+        1,
+        Intent(service, KuiesVpnService::class.java).setAction(KuiesVpnService.ACTION_STOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 

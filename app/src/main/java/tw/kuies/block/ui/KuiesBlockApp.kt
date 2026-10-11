@@ -68,7 +68,7 @@ fun KuiesBlockApp(
 
     DisposableEffect(Unit) {
         DnsStatsRepository.attach(appContext)
-        onDispose { executor.shutdown() }
+        onDispose { executor.shutdownNow() }
     }
 
     val vpnConsentLauncher = rememberLauncherForActivityResult(
@@ -78,17 +78,21 @@ fun KuiesBlockApp(
         settingsStore.setVpnAuthorizationGranted(granted)
         ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRequest(granted))
         if (granted) {
+            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
             KuiesVpnService.start(appContext)
         }
     }
 
     fun startRequested() {
         if (VpnAuthorization.isGranted(appContext)) {
+            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
             KuiesVpnService.start(appContext)
             return
         }
         val consent = VpnAuthorization.consentIntent(appContext)
         if (consent == null) {
+            settingsStore.setVpnAuthorizationGranted(true)
+            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
             KuiesVpnService.start(appContext)
         } else {
             vpnConsentLauncher.launch(consent)
@@ -137,7 +141,18 @@ fun KuiesBlockApp(
 
     fun onToggleProtection() {
         when (ProtectionStatusHolder.state) {
-            ProtectionState.ACTIVE, ProtectionState.STARTING -> KuiesVpnService.stop(appContext)
+            ProtectionState.ACTIVE, ProtectionState.STARTING -> {
+                KuiesVpnService.stop(appContext)
+                ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
+            }
+            ProtectionState.ERROR -> {
+                if (KuiesVpnService.isRunning) {
+                    KuiesVpnService.stop(appContext)
+                    ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
+                } else {
+                    startRequested()
+                }
+            }
             ProtectionState.NOT_AUTHORIZED -> {
                 val needsNotificationPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                     ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -149,15 +164,17 @@ fun KuiesBlockApp(
                     startRequested()
                 }
             }
-            ProtectionState.AUTHORIZED_IDLE, ProtectionState.ERROR -> startRequested()
+            ProtectionState.AUTHORIZED_IDLE -> startRequested()
         }
     }
 
     LaunchedEffect(appContext) {
-        // Show the last known state immediately, then correct it with the authoritative check.
-        ProtectionStatusHolder.update(
-            ProtectionStateRules.afterAuthorizationRequest(settingsStore.load().vpnAuthorizationGranted)
-        )
+        // Show the last known state if not already started/errored, then correct with authoritative check.
+        if (ProtectionStatusHolder.state == ProtectionState.NOT_AUTHORIZED) {
+            ProtectionStatusHolder.update(
+                ProtectionStateRules.afterAuthorizationRequest(settingsStore.load().vpnAuthorizationGranted)
+            )
+        }
         syncEnvironment()
     }
 
@@ -191,6 +208,8 @@ fun KuiesBlockApp(
             dnsStatus = dnsStatus,
             dnsHost = dnsConfig.host,
             dnsChecking = dnsChecking,
+            privateDnsState = privateDns,
+            isServiceRunning = KuiesVpnService.isRunning,
             onToggleProtection = { onToggleProtection() },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onOpenSettings = { destination = BlockDestination.SETTINGS },

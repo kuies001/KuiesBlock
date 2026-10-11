@@ -39,11 +39,21 @@ class ProtectionPresentationTest {
     }
 
     @Test
+    fun stateTitlesMatchDesignSpecification() {
+        assertEquals("防護已停用", ProtectionPresentation.title(ProtectionState.NOT_AUTHORIZED))
+        assertEquals("防護已停用", ProtectionPresentation.title(ProtectionState.AUTHORIZED_IDLE))
+        assertEquals("正在啟用防護", ProtectionPresentation.title(ProtectionState.STARTING))
+        assertEquals("防護已啟用", ProtectionPresentation.title(ProtectionState.ACTIVE))
+        assertEquals("防護異常", ProtectionPresentation.title(ProtectionState.ERROR))
+    }
+
+    @Test
     fun primaryActionOffersStopWhileRunning() {
         assertEquals("停用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.ACTIVE))
         assertEquals("停用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.STARTING))
         assertEquals("啟用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.AUTHORIZED_IDLE))
-        assertEquals("啟用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.ERROR))
+        assertEquals("重試啟用", ProtectionPresentation.primaryActionLabel(ProtectionState.ERROR, isServiceRunning = false))
+        assertEquals("停用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.ERROR, isServiceRunning = true))
         assertEquals("啟用防護", ProtectionPresentation.primaryActionLabel(ProtectionState.NOT_AUTHORIZED))
     }
 

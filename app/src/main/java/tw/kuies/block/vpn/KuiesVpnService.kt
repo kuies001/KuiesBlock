@@ -284,9 +284,13 @@ class KuiesVpnService : VpnService() {
     }
 
     private fun rebuildTransport(dnsServers: List<InetSocketAddress>) {
-        transport?.close()
-        transport = createTransport(dnsServers)
-        if (transport == null) {
+        val oldTransport = transport
+        val newTransport = createTransport(dnsServers)
+        if (oldTransport != null) {
+            Thread({ runCatching { oldTransport.close() } }, "kuies-transport-rebuild").start()
+        }
+        transport = newTransport
+        if (newTransport == null) {
             requestFailOpen(ProtectionError.ENDPOINT_NOT_DOH)
             return
         }
@@ -485,6 +489,9 @@ class KuiesVpnService : VpnService() {
         authorizationRevoked = true
         stopState = ProtectionStateRules.afterAuthorizationRevoked()
         stopError = null
+        teardown()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked(), null)
         super.onRevoke()
     }
 
@@ -499,12 +506,28 @@ class KuiesVpnService : VpnService() {
         ProtectionStatusHolder.update(finalState, stopError)
         stopState = null
         stopError = null
+        isRunning = false
         super.onDestroy()
     }
 
+    private fun stopProtectionByUser() {
+        stopState = ProtectionStateRules.afterServiceStopped()
+        stopError = null
+        teardown()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        notifications.cancelStopped()
+        ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
+        stopSelf()
+    }
+
     private fun teardown() {
-        if (!running && tunnel == null) return
+        if (!running && tunnel == null && workers == null) return
         running = false
+        isRunning = false
+
+        // Cancel any pending callbacks, such as probe retries
+        mainHandler.removeCallbacksAndMessages(null)
+
         runCatching { tunnelOutput?.flush() }
         // Closing the tunnel descriptor unblocks the reader thread.
         runCatching { tunnel?.close() }
@@ -512,12 +535,20 @@ class KuiesVpnService : VpnService() {
         tunnelInput = null
         tunnelOutput = null
 
-        runCatching { transport?.close() }
+        val transportToClose = transport
         transport = null
+        if (transportToClose != null) {
+            Thread({ runCatching { transportToClose.close() } }, "kuies-doh-teardown").start()
+        }
+
         workers?.shutdownNow()
         workers = null
-        runCatching { readerThread?.join(READER_JOIN_MILLIS) }
+
+        val reader = readerThread
         readerThread = null
+        if (reader != null && reader.isAlive) {
+            Thread({ runCatching { reader.join(READER_JOIN_MILLIS) } }, "kuies-reader-join").start()
+        }
 
         unregisterNetworkCallback()
         underlyingNetwork = null
@@ -549,7 +580,8 @@ class KuiesVpnService : VpnService() {
 
     companion object {
         private const val TAG = "KuiesVpnService"
-        private const val ACTION_START = "tw.kuies.block.action.VPN_START"
+        const val ACTION_START = "tw.kuies.block.action.VPN_START"
+        const val ACTION_STOP = "tw.kuies.block.action.VPN_STOP"
         private const val DEFAULT_MTU = 1500
         private const val FAILURE_THRESHOLD = 5
         private const val PROBE_ATTEMPTS = 3
@@ -560,6 +592,10 @@ class KuiesVpnService : VpnService() {
         private const val QUEUE_CAPACITY = 256
         private const val IDLE_THREAD_SECONDS = 30L
 
+        @Volatile
+        var isRunning: Boolean = false
+            internal set
+
         /** Starts the tunnel. Only call after `VpnService.prepare()` has been granted. */
         fun start(context: Context) {
             val intent = Intent(context, KuiesVpnService::class.java).setAction(ACTION_START)
@@ -568,6 +604,12 @@ class KuiesVpnService : VpnService() {
 
         /** Stops the tunnel and removes its ongoing notification. */
         fun stop(context: Context) {
+            val intent = Intent(context, KuiesVpnService::class.java).setAction(ACTION_STOP)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (exception: Exception) {
+                Log.w(TAG, "Could not send ACTION_STOP via startForegroundService: ${exception.message}")
+            }
             context.stopService(Intent(context, KuiesVpnService::class.java))
         }
     }

@@ -1,5 +1,6 @@
 package tw.kuies.block.doh
 
+import android.os.Looper
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetAddress
@@ -81,8 +82,24 @@ class OkHttpDohTransport(
     }
 
     override fun close() {
-        client.connectionPool.evictAll()
         client.dispatcher.executorService.shutdown()
+        val pool = client.connectionPool
+        // Evicting pooled TLS sockets writes close_notify alerts over the network, which
+        // causes NetworkOnMainThreadException if executed on Android's main looper.
+        // Always evict sockets on a background thread.
+        val evictTask = Runnable {
+            runCatching { pool.evictAll() }
+        }
+        val isMainLooper = try {
+            Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()
+        } catch (_: Throwable) {
+            false
+        }
+        if (isMainLooper) {
+            Thread(evictTask, "kuies-doh-evict").start()
+        } else {
+            evictTask.run()
+        }
     }
 
     private fun validate(response: Response, queryId: Int): DohResult {

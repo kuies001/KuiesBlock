@@ -17,8 +17,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +41,7 @@ import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.data.BlockStats
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConnectionScenario
+import tw.kuies.block.dns.PrivateDnsState
 
 @Composable
 fun HomeScreen(
@@ -49,6 +52,8 @@ fun HomeScreen(
     dnsStatus: DnsCheckStatus,
     dnsHost: String,
     dnsChecking: Boolean,
+    privateDnsState: PrivateDnsState = PrivateDnsState.UNKNOWN,
+    isServiceRunning: Boolean = false,
     onToggleProtection: () -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -67,8 +72,13 @@ fun HomeScreen(
         ProtectionCard(
             state = protectionState,
             error = protectionError,
+            isServiceRunning = isServiceRunning,
             onToggleProtection = onToggleProtection
         )
+
+        if (privateDnsState.isStrictHostname) {
+            PrivateDnsNoticeCard()
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             QueriesCard(stats = blockStats, modifier = Modifier.weight(1f))
@@ -120,8 +130,31 @@ private fun HomeHeader(onOpenSettings: () -> Unit) {
 private fun ProtectionCard(
     state: ProtectionState,
     error: ProtectionError?,
+    isServiceRunning: Boolean,
     onToggleProtection: () -> Unit
 ) {
+    val containerColor = when (state) {
+        ProtectionState.ACTIVE -> MaterialTheme.colorScheme.primaryContainer
+        ProtectionState.STARTING -> MaterialTheme.colorScheme.secondaryContainer
+        ProtectionState.ERROR -> MaterialTheme.colorScheme.errorContainer
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE ->
+            MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when (state) {
+        ProtectionState.ACTIVE -> MaterialTheme.colorScheme.primary
+        ProtectionState.STARTING -> MaterialTheme.colorScheme.secondary
+        ProtectionState.ERROR -> MaterialTheme.colorScheme.error
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE ->
+            MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val iconRes = when (state) {
+        ProtectionState.ACTIVE -> R.drawable.ic_shield
+        ProtectionState.STARTING -> R.drawable.ic_shield
+        ProtectionState.ERROR -> R.drawable.ic_shield_alert
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE ->
+            R.drawable.ic_shield_off
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.extraLarge,
@@ -138,24 +171,21 @@ private fun ProtectionCard(
                 modifier = Modifier
                     .size(132.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (ProtectionStateRules.isInterceptionActive(state)) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        }
-                    ),
+                    .background(containerColor),
                 contentAlignment = Alignment.Center
             ) {
+                if (state == ProtectionState.STARTING) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(108.dp),
+                        color = contentColor,
+                        strokeWidth = 3.dp
+                    )
+                }
                 Icon(
-                    painter = painterResource(R.drawable.ic_shield),
+                    painter = painterResource(iconRes),
                     contentDescription = null,
-                    tint = if (ProtectionStateRules.isInterceptionActive(state)) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    },
-                    modifier = Modifier.size(72.dp)
+                    tint = contentColor,
+                    modifier = Modifier.size(68.dp)
                 )
             }
             Text(
@@ -170,8 +200,16 @@ private fun ProtectionCard(
                 textAlign = TextAlign.Center
             )
             InterceptionPill(state = state)
-            Button(onClick = onToggleProtection, modifier = Modifier.fillMaxWidth()) {
-                Text(ProtectionPresentation.primaryActionLabel(state))
+            Button(
+                onClick = onToggleProtection,
+                modifier = Modifier.fillMaxWidth(),
+                colors = if (state == ProtectionState.ERROR && isServiceRunning) {
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                } else {
+                    ButtonDefaults.buttonColors()
+                }
+            ) {
+                Text(ProtectionPresentation.primaryActionLabel(state, isServiceRunning))
             }
         }
     }
@@ -179,11 +217,13 @@ private fun ProtectionCard(
 
 @Composable
 private fun InterceptionPill(state: ProtectionState) {
-    val active = ProtectionStateRules.isInterceptionActive(state)
-    val container =
-        if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-    val content =
-        if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+    val (container, content) = when (state) {
+        ProtectionState.ACTIVE -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.primary
+        ProtectionState.STARTING -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.secondary
+        ProtectionState.ERROR -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
+        ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE ->
+            MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(color = container, contentColor = content, shape = RoundedCornerShape(50)) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -191,7 +231,14 @@ private fun InterceptionPill(state: ProtectionState) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_block),
+                painter = painterResource(
+                    when (state) {
+                        ProtectionState.ACTIVE -> R.drawable.ic_check_circle
+                        ProtectionState.STARTING -> R.drawable.ic_refresh
+                        ProtectionState.ERROR -> R.drawable.ic_warning
+                        else -> R.drawable.ic_block
+                    }
+                ),
                 contentDescription = null,
                 modifier = Modifier.size(16.dp)
             )
@@ -199,6 +246,42 @@ private fun InterceptionPill(state: ProtectionState) {
                 text = ProtectionPresentation.interceptionLabel(state),
                 style = MaterialTheme.typography.bodySmall
             )
+        }
+    }
+}
+
+@Composable
+private fun PrivateDnsNoticeCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_info),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.home_private_dns_hostname_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = stringResource(R.string.home_private_dns_hostname_notice),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
         }
     }
 }
