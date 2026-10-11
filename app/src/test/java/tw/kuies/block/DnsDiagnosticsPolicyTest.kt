@@ -14,8 +14,7 @@ class DnsDiagnosticsPolicyTest {
         tcpConnected = usable,
         tlsHandshakeOk = usable,
         usable = usable,
-        certificateSubject = null,
-        errorMessage = null
+        failure = null
     )
 
     @Test

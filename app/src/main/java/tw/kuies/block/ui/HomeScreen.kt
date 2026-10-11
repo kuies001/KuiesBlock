@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -39,17 +38,16 @@ import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.data.BlockStats
 import tw.kuies.block.dns.DnsCheckStatus
-import tw.kuies.block.dns.PrivateDnsMode
-import tw.kuies.block.dns.PrivateDnsSettings
+import tw.kuies.block.dns.DnsConnectionScenario
 
 @Composable
 fun HomeScreen(
     protectionState: ProtectionState,
     protectionError: ProtectionError?,
     blockStats: BlockStats,
+    dnsScenario: DnsConnectionScenario,
     dnsStatus: DnsCheckStatus,
     dnsHost: String,
-    privateDnsMode: PrivateDnsMode,
     dnsChecking: Boolean,
     onToggleProtection: () -> Unit,
     onRunDnsDiagnostics: () -> Unit,
@@ -78,9 +76,9 @@ fun HomeScreen(
         }
 
         DnsStatusCard(
+            scenario = dnsScenario,
             status = dnsStatus,
             host = dnsHost,
-            privateDnsMode = privateDnsMode,
             checking = dnsChecking,
             onRefresh = onRunDnsDiagnostics
         )
@@ -249,15 +247,24 @@ private fun BlockedCard(stats: BlockStats, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The DNS card keeps to a headline and at most one short line. The fuller explanation lives only on
+ * the settings screen, so the same wording is never duplicated across both.
+ */
 @Composable
 private fun DnsStatusCard(
+    scenario: DnsConnectionScenario,
     status: DnsCheckStatus,
     host: String,
-    privateDnsMode: PrivateDnsMode,
     checking: Boolean,
     onRefresh: () -> Unit
 ) {
-    val shown = if (checking) DnsCheckStatus.CHECKING else status
+    val colors = dnsStatusColors(scenario)
+    val headline = if (scenario == DnsConnectionScenario.UNKNOWN) {
+        DnsPresentation.statusLabel(status)
+    } else {
+        DnsPresentation.scenarioLabel(scenario)
+    }
     InfoCard(
         modifier = Modifier.fillMaxWidth(),
         iconRes = R.drawable.ic_dns,
@@ -278,28 +285,27 @@ private fun DnsStatusCard(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                painter = painterResource(statusIcon(shown)),
+                painter = painterResource(dnsStatusIcon(scenario)),
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
-                tint = statusColor(shown)
+                tint = colors.accent
             )
             Text(
-                text = DnsPresentation.statusLabel(shown),
+                text = headline,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = host,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
-        if (PrivateDnsSettings.mayBypassInterception(privateDnsMode)) {
+        Text(
+            text = host,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        DnsPresentation.scenarioShortHint(scenario)?.let { hint ->
             Text(
-                text = stringResource(R.string.home_private_dns_warning),
+                text = hint,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
+                color = colors.accent
             )
         }
     }
@@ -343,20 +349,4 @@ private fun InfoCard(
             content()
         }
     }
-}
-
-private fun statusIcon(status: DnsCheckStatus): Int = when (status) {
-    DnsCheckStatus.OK -> R.drawable.ic_check_circle
-    DnsCheckStatus.WARNING -> R.drawable.ic_warning
-    DnsCheckStatus.ERROR -> R.drawable.ic_warning
-    DnsCheckStatus.CHECKING -> R.drawable.ic_refresh
-    DnsCheckStatus.NOT_CHECKED -> R.drawable.ic_info
-}
-
-@Composable
-private fun statusColor(status: DnsCheckStatus): Color = when (status) {
-    DnsCheckStatus.OK -> MaterialTheme.colorScheme.primary
-    DnsCheckStatus.WARNING -> MaterialTheme.colorScheme.secondary
-    DnsCheckStatus.ERROR -> MaterialTheme.colorScheme.error
-    DnsCheckStatus.CHECKING, DnsCheckStatus.NOT_CHECKED -> MaterialTheme.colorScheme.onSurfaceVariant
 }

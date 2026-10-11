@@ -1,32 +1,64 @@
 package tw.kuies.block
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kuies.block.dns.DnsCheckStatus
+import tw.kuies.block.dns.DnsConnectionScenario
 import tw.kuies.block.dns.DnsEndpointProbe
+import tw.kuies.block.dns.DnsProbeFailure
+import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.ui.DnsPresentation
 
 class DnsPresentationTest {
 
-    @Test
-    fun tlsSuccessIsReportedExplicitly() {
-        val probe = DnsEndpointProbe("DoH (443)", 443, true, true, true, "CN=dns.kuies.tw", null)
-        assertEquals("可用（TLS 通過）", DnsPresentation.probeSummary(probe))
+    private fun probe(
+        tcpConnected: Boolean,
+        tlsHandshakeOk: Boolean,
+        usable: Boolean,
+        failure: DnsProbeFailure?
+    ) = DnsEndpointProbe(
+        label = "DoH (443)",
+        port = 443,
+        tcpConnected = tcpConnected,
+        tlsHandshakeOk = tlsHandshakeOk,
+        usable = usable,
+        failure = failure
+    )
+
+    private val ipv4 = Regex("""\b\d{1,3}(\.\d{1,3}){3}\b""")
+    private val ipv6 = Regex("""[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){2,}""")
+    private val rawException = Regex("""[A-Za-z]+(Exception|Error)\b""")
+
+    /** No rendered string may carry an address or a raw exception name. */
+    private fun assertNoLeak(text: String) {
+        assertFalse("leaked an IPv4 address: $text", ipv4.containsMatchIn(text))
+        assertFalse("leaked an IPv6 address: $text", ipv6.containsMatchIn(text))
+        assertFalse("leaked a raw exception name: $text", rawException.containsMatchIn(text))
     }
 
     @Test
-    fun connectionFailureNamesTheError() {
-        val probe = DnsEndpointProbe("DoH (443)", 443, false, false, false, null, "ConnectException")
-        val summary = DnsPresentation.probeSummary(probe)
+    fun tlsSuccessIsReportedExplicitly() {
+        assertEquals("可用（TLS 通過）", DnsPresentation.probeSummary(probe(true, true, true, null)))
+    }
+
+    @Test
+    fun connectionFailureIsReportedWithoutRawExceptionText() {
+        val summary = DnsPresentation.probeSummary(probe(false, false, false, DnsProbeFailure.CONNECTION_FAILED))
         assertTrue(summary.contains("無法連線"))
-        assertTrue(summary.contains("ConnectException"))
+        assertNoLeak(summary)
     }
 
     @Test
     fun tlsFailureIsDistinguishedFromConnectionFailure() {
-        val probe = DnsEndpointProbe("DoT (853)", 853, true, false, false, null, "SSLHandshakeException")
-        assertTrue(DnsPresentation.probeSummary(probe).contains("TLS 失敗"))
+        val summary = DnsPresentation.probeSummary(
+            probe(true, false, false, DnsProbeFailure.TLS_CERTIFICATE_REJECTED)
+        )
+        assertTrue(summary.contains("TLS 失敗"))
+        assertTrue(summary.contains("TLS 憑證驗證失敗"))
+        assertNoLeak(summary)
     }
 
     @Test
@@ -34,5 +66,61 @@ class DnsPresentationTest {
         DnsCheckStatus.entries.forEach { status ->
             assertTrue(DnsPresentation.statusLabel(status).isNotBlank())
         }
+    }
+
+    @Test
+    fun everyProbeFailureHasAFriendlyLabel() {
+        DnsProbeFailure.entries.forEach { failure ->
+            val label = DnsPresentation.probeFailureLabel(failure)
+            assertTrue("$failure has no label", label.isNotBlank())
+            assertNoLeak(label)
+        }
+    }
+
+    @Test
+    fun everyScenarioHasALabelAndNoScenarioWordingLeaksAnything() {
+        val privateDns = PrivateDnsSettings.stateOf("hostname", "dns.kuies.tw")
+        DnsConnectionScenario.entries.forEach { scenario ->
+            val label = DnsPresentation.scenarioLabel(scenario)
+            assertTrue(label.isNotBlank())
+            assertNoLeak(label)
+            DnsPresentation.scenarioShortHint(scenario)?.let { assertNoLeak(it) }
+            DnsPresentation.scenarioExplanation(scenario, privateDns, "dns.kuies.tw")
+                ?.let { assertNoLeak(it) }
+        }
+        assertNoLeak(DnsPresentation.resolutionFailureLabel())
+    }
+
+    @Test
+    fun theBypassExplanationNamesTheSameServerOnlyWhenItMatches() {
+        val matching = PrivateDnsSettings.stateOf("hostname", "dns.kuies.tw")
+        val different = PrivateDnsSettings.stateOf("hostname", "private.example")
+        val explanation = DnsPresentation.scenarioExplanation(
+            DnsConnectionScenario.BYPASS_RISK,
+            matching,
+            "dns.kuies.tw"
+        )!!
+        assertTrue(explanation.contains("可能直接處理部分查詢"))
+        assertTrue(explanation.contains("攔截統計可能不完整"))
+        assertTrue(explanation.contains("相同的 DNS 伺服器"))
+        assertTrue(explanation.contains("可能不經過 KuiesBlock"))
+
+        val plain = DnsPresentation.scenarioExplanation(
+            DnsConnectionScenario.BYPASS_RISK,
+            different,
+            "dns.kuies.tw"
+        )!!
+        assertTrue(plain.contains("可能直接處理部分查詢"))
+        assertFalse(plain.contains("相同的 DNS 伺服器"))
+    }
+
+    @Test
+    fun thePrivateDnsMatchLabelNeverShowsTheHostname() {
+        val matching = PrivateDnsSettings.stateOf("hostname", "dns.kuies.tw")
+        assertEquals("與 KuiesBlock 相同", DnsPresentation.privateDnsMatchLabel(matching, "dns.kuies.tw"))
+        val label = DnsPresentation.privateDnsMatchLabel(matching, "dns.kuies.tw")!!
+        assertFalse(label.contains("kuies.tw"))
+        assertNull(DnsPresentation.privateDnsMatchLabel(PrivateDnsSettings.stateOf("opportunistic", null), "dns.kuies.tw"))
+        assertNull(DnsPresentation.privateDnsMatchLabel(PrivateDnsSettings.stateOf("off", null), "dns.kuies.tw"))
     }
 }

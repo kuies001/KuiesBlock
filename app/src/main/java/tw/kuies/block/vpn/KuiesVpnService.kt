@@ -143,7 +143,7 @@ class KuiesVpnService : VpnService() {
         ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting())
 
         connectivity = getSystemService(ConnectivityManager::class.java)
-        val underlying = findUnderlyingNetwork()
+        val underlying = UnderlyingNetworkFinder.find(connectivity)
         if (underlying == null) {
             Log.w(TAG, "No usable non-VPN network for the DoH bootstrap.")
             requestFailOpen(ProtectionError.NO_UNDERLYING_NETWORK)
@@ -184,53 +184,6 @@ class KuiesVpnService : VpnService() {
         registerUnderlyingNetworkCallback()
         startReaderThread(plan)
         verifyDnsRoundTrip()
-    }
-
-    private data class UnderlyingNetwork(val network: Network, val dnsServers: List<InetSocketAddress>)
-
-    /**
-     * Finds the network our own upstream traffic should leave through.
-     *
-     * The VPN transport is always skipped, so the DoH bootstrap can never be pointed at our own
-     * virtual DNS address (which would recurse).
-     */
-    private fun findUnderlyingNetwork(): UnderlyingNetwork? {
-        val manager = connectivity ?: return null
-        // `activeNetwork` is the non-VPN default until our own tunnel exists, which covers a fresh
-        // start without enumerating anything.
-        val active = manager.activeNetwork
-        if (active != null && !isVpn(manager, active)) {
-            withDnsServers(manager, active)?.let { return it }
-        }
-        return anyUnderlyingNetwork(manager)
-    }
-
-    private fun isVpn(manager: ConnectivityManager, network: Network): Boolean =
-        manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != false
-
-    private fun withDnsServers(manager: ConnectivityManager, network: Network): UnderlyingNetwork? {
-        val capabilities = manager.getNetworkCapabilities(network) ?: return null
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
-        val servers = manager.getLinkProperties(network)?.dnsServers.orEmpty()
-        if (servers.isEmpty()) return null
-        return UnderlyingNetwork(network, servers.map { InetSocketAddress(it, PLAIN_DNS_PORT) })
-    }
-
-    /**
-     * Fallback for a sticky restart, where the tunnel may still be the active network.
-     *
-     * Enumerating networks is deprecated in favour of callbacks, but callbacks are asynchronous and
-     * the DoH bootstrap has to be ready before the tunnel is created. Skipping the VPN transport
-     * keeps this safe; a network whose capabilities cannot be read is treated as a VPN and skipped
-     * rather than guessed at.
-     */
-    @Suppress("DEPRECATION")
-    private fun anyUnderlyingNetwork(manager: ConnectivityManager): UnderlyingNetwork? {
-        for (network in manager.allNetworks) {
-            if (isVpn(manager, network)) continue
-            withDnsServers(manager, network)?.let { return it }
-        }
-        return null
     }
 
     private fun establishTunnel(plan: VpnRoutePlan): ParcelFileDescriptor? = try {
@@ -315,8 +268,7 @@ class KuiesVpnService : VpnService() {
     }
 
     private fun onUnderlyingNetworkChanged(network: Network, linkProperties: LinkProperties?) {
-        val servers = linkProperties?.dnsServers.orEmpty()
-            .map { InetSocketAddress(it, PLAIN_DNS_PORT) }
+        val servers = UnderlyingNetworkFinder.dnsServersOf(linkProperties)
         mainHandler.post {
             if (!running) return@post
             val previous = underlyingNetwork
@@ -598,7 +550,6 @@ class KuiesVpnService : VpnService() {
     companion object {
         private const val TAG = "KuiesVpnService"
         private const val ACTION_START = "tw.kuies.block.action.VPN_START"
-        private const val PLAIN_DNS_PORT = 53
         private const val DEFAULT_MTU = 1500
         private const val FAILURE_THRESHOLD = 5
         private const val PROBE_ATTEMPTS = 3

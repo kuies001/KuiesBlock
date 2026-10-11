@@ -2,6 +2,60 @@
 
 本專案遵循語意化版本。以下記錄各版本的實際變更。
 
+## v0.2.1
+
+**主題：修正私人 DNS 誤判為連線異常，並停止在介面顯示自架 DNS 伺服器 IP**
+
+### 修正
+
+- **Android 私人 DNS 狀態誤判（根因）**：DNS 診斷原本以**系統解析器**（`InetAddress.getAllByName`，探測時的
+  `InetSocketAddress(host, port)` 亦然）解析 DoH 主機名稱。但這正是 Android「私人 DNS → 指定主機名稱」會**接管**
+  的解析路徑，而 KuiesBlock 自己的 DoH 路徑從不使用系統解析器（它以受保護的 UDP 直接詢問底層網路的 DNS）。
+  因此當私人 DNS 設為 `dns.kuies.tw` 而其 DoT 通道在該網路無法建立時，診斷會得到 `UnknownHostException`，
+  並把「Android 的私人 DNS 路徑失效」誤報成「KuiesBlock 連線異常」。
+  - 診斷改為使用與 DoH client 相同的路徑：`UnderlyingNetworkFinder` 取得底層網路 DNS → `PlainDnsBootstrap`
+    解析 → 以解析出的位址連線，但仍設定 SNI 與 `endpointIdentificationAlgorithm = "HTTPS"`，
+    **TLS 憑證與主機名稱驗證維持不變、不停用**。
+  - 私人 DNS 設定**只會增加「可能繞過」的提示**，不會讓可用的連線變成失敗；真正的失敗也**不會**被顯示成正常。
+- 私人 DNS 狀態改為同時讀取 `private_dns_mode` 與 `private_dns_specifier`；**僅在嚴格指定主機名稱模式**才保留
+  hostname，且只用於比對「是否與 KuiesBlock 相同」，介面不顯示該主機名稱。
+
+### 安全性與隱私
+
+- **移除介面上的「解析位址」欄位**，診斷報告模型不再包含任何 IPv4／IPv6 位址（結構上不可能外洩）。
+- 移除 TLS 憑證主體欄位。
+- 探測失敗改為分類列舉（`DnsProbeFailure`），介面只顯示中文化的簡短原因，
+  **不再直接顯示原始 Exception 名稱或訊息**。
+- Logcat 不記錄 DNS 伺服器 IP、主機位址或查詢內容。
+
+### 介面
+
+- DNS 狀態改為三種情境並以顏色區分：連線正常（品牌綠）、DNS 正常但可能繞過攔截（柔和橘）、
+  連線異常（錯誤紅）；私人 DNS 警告與連線錯誤因此不再混淆。
+- 首頁只顯示狀態標題與一行短提示，完整說明只在設定頁出現，避免同一段長文字重複。
+- 技術敘述改為一般使用者可理解的繁體中文；未新增多餘元件或動畫。
+
+### 測試
+
+- 單元測試由 108 個增加至 **127 個**（維持原有 108 個全數通過，新增 19 個）。
+- 新增涵蓋：私人 DNS 關閉／自動／指定主機名稱／指定相同主機 搭配 DoH 正常、
+  私人 DNS 啟用但 DoH 真失敗、`UnknownHostException` 不得被視為正常、TLS 失敗維持失敗、
+  介面文字不含 IP 與原始例外、私人 DNS 非嚴格模式不得誤用殘留的 specifier，
+  以及診斷改用注入解析器後的行為。
+
+### 變更
+
+- `versionName` → `0.2.1`，`versionCode` → `3`。
+
+### 已知限制（與 v0.2.0 相同）
+
+- 僅攔截 IPv4 UDP DNS；DNS-over-TCP 不支援；IPv6 的 DNS 不攔截。
+- 部分 App 自建 DNS 與 Android 私人 DNS（自動／指定主機名稱）可能繞過攔截。
+- 廣告攔截次數無法準確得知，固定顯示「尚無資料」。
+- **尚未完成實機驗證**（見 README 的「目前狀態」）。
+
+---
+
 ## v0.2.0
 
 **主題：DNS-only VPN 核心 —— 真正透過本機 VPN 將系統 DNS 查詢加密送往 dns.kuies.tw**

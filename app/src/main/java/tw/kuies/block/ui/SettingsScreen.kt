@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -20,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -33,10 +35,11 @@ import tw.kuies.block.R
 import tw.kuies.block.data.BlockStats
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConfig
+import tw.kuies.block.dns.DnsConnectionScenario
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsProtocol
-import tw.kuies.block.dns.PrivateDnsMode
-import tw.kuies.block.dns.PrivateDnsSettings
+import tw.kuies.block.dns.DnsResolutionState
+import tw.kuies.block.dns.PrivateDnsState
 import tw.kuies.block.doh.DohEndpointOutcome
 import tw.kuies.block.doh.DohEndpointPolicy
 
@@ -45,8 +48,9 @@ fun SettingsScreen(
     dnsConfig: DnsConfig,
     dnsReport: DnsDiagnosticReport,
     dnsChecking: Boolean,
+    dnsScenario: DnsConnectionScenario,
+    privateDns: PrivateDnsState,
     blockStats: BlockStats,
-    privateDnsMode: PrivateDnsMode,
     appVersion: String,
     onSelectProtocol: (DnsProtocol) -> Unit,
     onRunDnsDiagnostics: () -> Unit,
@@ -66,7 +70,8 @@ fun SettingsScreen(
             dnsConfig = dnsConfig,
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
-            privateDnsMode = privateDnsMode,
+            dnsScenario = dnsScenario,
+            privateDns = privateDns,
             onSelectProtocol = onSelectProtocol,
             onRunDnsDiagnostics = onRunDnsDiagnostics
         )
@@ -100,7 +105,8 @@ private fun DnsSection(
     dnsConfig: DnsConfig,
     dnsReport: DnsDiagnosticReport,
     dnsChecking: Boolean,
-    privateDnsMode: PrivateDnsMode,
+    dnsScenario: DnsConnectionScenario,
+    privateDns: PrivateDnsState,
     onSelectProtocol: (DnsProtocol) -> Unit,
     onRunDnsDiagnostics: () -> Unit
 ) {
@@ -116,6 +122,14 @@ private fun DnsSection(
                 is DohEndpointOutcome.Invalid -> "—"
             }
         )
+
+        if (dnsScenario != DnsConnectionScenario.UNKNOWN) {
+            ConnectionBanner(
+                scenario = dnsScenario,
+                explanation = DnsPresentation.scenarioExplanation(dnsScenario, privateDns, dnsConfig.host)
+            )
+        }
+
         Text(
             text = stringResource(R.string.settings_dns_protocol_label),
             style = MaterialTheme.typography.bodySmall,
@@ -134,17 +148,16 @@ private fun DnsSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        val matchLabel = DnsPresentation.privateDnsMatchLabel(privateDns, dnsConfig.host)
+        val privateDnsValue = if (matchLabel != null) {
+            "${DnsPresentation.privateDnsLabel(privateDns.mode)}（$matchLabel）"
+        } else {
+            DnsPresentation.privateDnsLabel(privateDns.mode)
+        }
         LabeledValue(
             label = stringResource(R.string.settings_private_dns_label),
-            value = DnsPresentation.privateDnsLabel(privateDnsMode)
+            value = privateDnsValue
         )
-        if (PrivateDnsSettings.mayBypassInterception(privateDnsMode)) {
-            Text(
-                text = stringResource(R.string.settings_private_dns_warning),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary
-            )
-        }
         Text(
             text = stringResource(R.string.settings_scope_note),
             style = MaterialTheme.typography.bodySmall,
@@ -158,10 +171,42 @@ private fun DnsSection(
         ) {
             Text(stringResource(R.string.action_run_dns_diagnostics))
         }
-        DiagnosticReport(
-            dnsReport = dnsReport,
-            dnsChecking = dnsChecking
-        )
+        DiagnosticResult(dnsReport = dnsReport, dnsChecking = dnsChecking)
+    }
+}
+
+@Composable
+private fun ConnectionBanner(scenario: DnsConnectionScenario, explanation: String?) {
+    val colors = dnsStatusColors(scenario)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = colors.container,
+        contentColor = colors.content,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                painter = painterResource(dnsStatusIcon(scenario)),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = colors.accent
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = DnsPresentation.scenarioLabel(scenario),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                if (explanation != null) {
+                    Text(text = explanation, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
 }
 
@@ -192,32 +237,23 @@ private fun ProtocolRow(protocol: DnsProtocol, selected: Boolean, onSelect: () -
     }
 }
 
+/**
+ * Shows only categories and outcomes — never a resolved address, a certificate detail, or a raw
+ * exception — so the user's own DNS server cannot leak through this screen.
+ */
 @Composable
-private fun DiagnosticReport(dnsReport: DnsDiagnosticReport, dnsChecking: Boolean) {
+private fun DiagnosticResult(dnsReport: DnsDiagnosticReport, dnsChecking: Boolean) {
     val status = if (dnsChecking) DnsCheckStatus.CHECKING else dnsReport.status
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         LabeledValue(
             label = stringResource(R.string.settings_diagnostic_result),
             value = DnsPresentation.statusLabel(status)
         )
-        if (dnsReport.resolvedAddresses.isNotEmpty()) {
-            LabeledValue(
-                label = stringResource(R.string.settings_diagnostic_resolved),
-                value = dnsReport.resolvedAddresses.joinToString()
-            )
-        }
-        dnsReport.resolutionError?.let { error ->
+        if (!dnsChecking && dnsReport.resolution == DnsResolutionState.FAILED) {
             Text(
-                text = stringResource(R.string.settings_diagnostic_resolution_failed, error),
+                text = DnsPresentation.resolutionFailureLabel(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
-            )
-        }
-        if (dnsReport.probes.isEmpty() && dnsReport.status != DnsCheckStatus.NOT_CHECKED) {
-            Text(
-                text = stringResource(R.string.settings_diagnostic_no_probe),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         dnsReport.probes.forEach { probe ->
@@ -227,15 +263,6 @@ private fun DiagnosticReport(dnsReport: DnsDiagnosticReport, dnsChecking: Boolea
                     probe.label,
                     DnsPresentation.probeSummary(probe)
                 ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        val certificate = dnsReport.probes.firstOrNull { !it.certificateSubject.isNullOrBlank() }
-            ?.certificateSubject
-        if (certificate != null) {
-            Text(
-                text = stringResource(R.string.settings_diagnostic_certificate, certificate),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

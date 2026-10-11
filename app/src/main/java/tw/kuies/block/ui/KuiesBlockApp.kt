@@ -29,13 +29,18 @@ import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConfigStore
+import tw.kuies.block.dns.DnsConnectionScenarioPolicy
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsDiagnostics
 import tw.kuies.block.dns.DnsProtocol
-import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.dns.PrivateDnsSettings
+import tw.kuies.block.dns.PrivateDnsState
+import tw.kuies.block.doh.PlainDnsBootstrap
+import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.vpn.KuiesVpnService
+import tw.kuies.block.vpn.UnderlyingNetworkFinder
 import tw.kuies.block.vpn.VpnAuthorization
+import java.net.InetAddress
 import java.util.concurrent.Executors
 
 private const val TAG = "KuiesBlockApp"
@@ -59,7 +64,7 @@ fun KuiesBlockApp(
     var dnsConfig by remember { mutableStateOf(dnsStore.load()) }
     var dnsReport by remember { mutableStateOf(DnsDiagnosticReport.notChecked(dnsConfig.host, dnsConfig.protocol)) }
     var dnsChecking by remember { mutableStateOf(false) }
-    var privateDnsMode by remember { mutableStateOf(PrivateDnsMode.UNKNOWN) }
+    var privateDns by remember { mutableStateOf(PrivateDnsState.UNKNOWN) }
 
     DisposableEffect(Unit) {
         DnsStatsRepository.attach(appContext)
@@ -97,7 +102,7 @@ fun KuiesBlockApp(
     fun syncEnvironment() {
         val granted = VpnAuthorization.isGranted(appContext)
         settingsStore.setVpnAuthorizationGranted(granted)
-        privateDnsMode = PrivateDnsSettings.read(appContext)
+        privateDns = PrivateDnsSettings.read(appContext)
         DnsStatsRepository.refresh()
         when {
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
@@ -112,18 +117,16 @@ fun KuiesBlockApp(
         val config = dnsConfig
         executor.execute {
             val report = try {
-                DnsDiagnostics(config).run()
+                // Resolve through the same protected bootstrap the DoH client uses, never through the
+                // system resolver that Android's Private DNS takes over. The addresses stay inside
+                // this call: the report carries outcomes only.
+                val servers = UnderlyingNetworkFinder.find(appContext)?.dnsServers.orEmpty()
+                val resolver: (String) -> List<InetAddress> =
+                    PlainDnsBootstrap(VpnSocketProtector.NONE, servers)::resolve
+                DnsDiagnostics(config, resolver).run()
             } catch (exception: Exception) {
                 Log.w(TAG, "DNS diagnostics failed: ${exception.javaClass.simpleName}")
-                DnsDiagnosticReport(
-                    host = config.host,
-                    protocol = config.protocol,
-                    resolvedAddresses = emptyList(),
-                    resolutionError = exception.javaClass.simpleName,
-                    probes = emptyList(),
-                    status = DnsCheckStatus.ERROR,
-                    checkedAtMillis = System.currentTimeMillis()
-                )
+                DnsDiagnosticReport.failed(config.host, config.protocol, System.currentTimeMillis())
             }
             mainHandler.post {
                 dnsReport = report
@@ -177,15 +180,16 @@ fun KuiesBlockApp(
         protectionState == ProtectionState.ERROR -> DnsCheckStatus.ERROR
         else -> dnsReport.status
     }
+    val dnsScenario = DnsConnectionScenarioPolicy.scenarioOf(dnsStatus, privateDns.mayBypassInterception)
 
     when (destination) {
         BlockDestination.HOME -> HomeScreen(
             protectionState = protectionState,
             protectionError = protectionError,
             blockStats = blockStats,
+            dnsScenario = dnsScenario,
             dnsStatus = dnsStatus,
             dnsHost = dnsConfig.host,
-            privateDnsMode = privateDnsMode,
             dnsChecking = dnsChecking,
             onToggleProtection = { onToggleProtection() },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
@@ -197,8 +201,9 @@ fun KuiesBlockApp(
             dnsConfig = dnsConfig,
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
+            dnsScenario = dnsScenario,
+            privateDns = privateDns,
             blockStats = blockStats,
-            privateDnsMode = privateDnsMode,
             appVersion = appVersion,
             onSelectProtocol = { protocol ->
                 val updated = dnsConfig.copy(protocol = protocol)
