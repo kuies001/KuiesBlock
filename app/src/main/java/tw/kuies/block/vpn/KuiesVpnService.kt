@@ -56,6 +56,7 @@ import tw.kuies.block.doh.DohEndpointPolicy
 import tw.kuies.block.doh.DohFailure
 import tw.kuies.block.doh.DohResult
 import tw.kuies.block.doh.DohTransport
+import tw.kuies.block.doh.HostnameResolver
 import tw.kuies.block.doh.OkHttpDohTransport
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
@@ -260,10 +261,21 @@ class KuiesVpnService : VpnService() {
         }
         probeHost = config.host
         val protector = socketProtector()
+        val bootstrap = PlainDnsBootstrap(protector, dnsServers)
+        // Debug-only: separate the plain-DNS bootstrap time from the TLS/HTTP time. Logs a duration
+        // and how many addresses came back — a count only, never an address.
+        val timedResolver = HostnameResolver { host ->
+            val startedAt = SystemClock.elapsedRealtime()
+            val resolved = bootstrap.resolve(host)
+            logStartupDebug(
+                "dohBootstrapMs=${SystemClock.elapsedRealtime() - startedAt} resolvedCount=${resolved.size}"
+            )
+            resolved
+        }
         return OkHttpDohTransport(
             endpoint = endpoint,
             protector = protector,
-            resolver = PlainDnsBootstrap(protector, dnsServers)
+            resolver = timedResolver
         )
     }
 
