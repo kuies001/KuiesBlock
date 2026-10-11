@@ -24,6 +24,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ArrayBlockingQueue
@@ -208,8 +209,73 @@ class KuiesVpnService : VpnService() {
         }
         routePlan = plan
 
+        // One place only decides the experiment configuration; nothing else branches on the mode.
+        val experimentMode = DnsExperiment.mode(this)
+        logStartupDebug("dnsExperimentMode=${experimentMode.name}")
+        if (experimentMode == DnsExperimentMode.E1_REAL_DOT_ADDRESS) {
+            // E1 needs the real DoT address, and the bootstrap blocks: resolve off the main thread.
+            resolveRealDotAddress(underlying.dnsServers, plan, timeline)
+            return
+        }
+        val declaration = DnsExperimentPlanner.declarationFor(experimentMode, plan, realDotAddress = null)
+        if (declaration == null) {
+            Log.e(TAG, "No safe tunnel declaration for $experimentMode.")
+            requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
+            return
+        }
+        establishAndServe(declaration, plan, timeline)
+    }
+
+    /**
+     * Resolves the real DoT server address for the E1 experiment on a background thread, then
+     * continues the start on the main thread. It never falls back to a hard-coded or unverified
+     * address: without a resolved address the experiment is abandoned and protection fails open,
+     * so a test tunnel that could break the network is never created.
+     */
+    private fun resolveRealDotAddress(
+        underlyingDnsServers: List<InetSocketAddress>,
+        plan: VpnRoutePlan,
+        timeline: StartupTimeline
+    ) {
+        val host = DnsConfigStore(this).load().host
+        val bootstrap = PlainDnsBootstrap(socketProtector(), underlyingDnsServers)
+        val thread = Thread({
+            val startedAt = SystemClock.elapsedRealtime()
+            val addresses = runCatching { bootstrap.resolve(host) }.getOrDefault(emptyList())
+            val ipv4 = addresses.firstOrNull { it is Inet4Address }?.hostAddress
+            logStartupDebug(
+                "e1DotResolveMs=${SystemClock.elapsedRealtime() - startedAt} resolvedCount=${addresses.size}"
+            )
+            if (LOG_DROP_ENDPOINTS) {
+                // Temporary address form, debug only, gated on the same switch as the drop detail.
+                Log.d(TAG, "e1DotAddress=${ipv4 ?: "none"}")
+            }
+            mainHandler.post {
+                if (!running) return@post
+                val declaration = DnsExperimentPlanner.declarationFor(
+                    DnsExperimentMode.E1_REAL_DOT_ADDRESS,
+                    plan,
+                    ipv4
+                )
+                if (declaration == null) {
+                    Log.w(TAG, "E1 has no usable real DoT address; not establishing a tunnel.")
+                    requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+                    return@post
+                }
+                establishAndServe(declaration, plan, timeline)
+            }
+        }, "kuies-e1-dot-resolve")
+        thread.isDaemon = true
+        thread.start()
+    }
+
+    private fun establishAndServe(
+        declaration: TunnelDeclaration,
+        plan: VpnRoutePlan,
+        timeline: StartupTimeline
+    ) {
         val tunnelStartedAt = SystemClock.elapsedRealtime()
-        val descriptor = establishTunnel(plan)
+        val descriptor = establishTunnel(declaration)
         logStartupDebug("tunnelEstablishMs=${SystemClock.elapsedRealtime() - tunnelStartedAt}")
         if (descriptor == null) {
             requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
@@ -228,14 +294,16 @@ class KuiesVpnService : VpnService() {
         verifyDnsRoundTrip()
     }
 
-    private fun establishTunnel(plan: VpnRoutePlan): ParcelFileDescriptor? = try {
+    private fun establishTunnel(declaration: TunnelDeclaration): ParcelFileDescriptor? = try {
         val builder = Builder()
             .setSession(getString(R.string.app_name))
-            .setMtu(plan.mtu)
-            .addAddress(plan.interfaceAddress, plan.interfacePrefixLength)
-            .addDnsServer(plan.dnsServerAddress)
-            .addRoute(plan.dnsServerAddress, plan.dnsPrefixLength)
-            .setBlocking(true)
+            .setMtu(declaration.mtu)
+            .addAddress(declaration.interfaceAddress, declaration.interfacePrefixLength)
+        // A null DNS server or route is how the E1/E2 experiments leave them undeclared; BASELINE
+        // always supplies both, so the shipped configuration is byte-for-byte unchanged.
+        declaration.dnsServer?.let { builder.addDnsServer(it) }
+        declaration.dnsRoute?.let { builder.addRoute(it.address, it.prefixLength) }
+        builder.setBlocking(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Restrict the tunnel to IPv4 so IPv6 can never be captured without a path to forward it.
             builder.allowFamily(OsConstants.AF_INET)

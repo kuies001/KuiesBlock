@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay. This component does not exist in a release APK, so a release build
+  can never change the Private-DNS experiment mode. It is exported so `adb shell am broadcast` can
+  reach it by explicit component name.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name="tw.kuies.block.debug.DebugDnsExperimentReceiver"
+            android:exported="true" />
+    </application>
+
+</manifest>
