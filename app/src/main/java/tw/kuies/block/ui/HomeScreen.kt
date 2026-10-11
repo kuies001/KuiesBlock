@@ -79,7 +79,9 @@ fun HomeScreen(
         )
 
         if (privateDnsState.isStrictHostname) {
-            PrivateDnsNoticeCard()
+            PrivateDnsNoticeCard(
+                target = ProtectionPresentation.privateDnsTarget(privateDnsState, dnsHost)
+            )
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -269,7 +271,19 @@ private fun InterceptionPill(state: ProtectionState, dnsPath: DnsPath) {
 }
 
 @Composable
-private fun PrivateDnsNoticeCard() {
+private fun PrivateDnsNoticeCard(target: PrivateDnsTarget) {
+    val titleRes = when (target) {
+        PrivateDnsTarget.OUR_HOSTNAME -> R.string.home_private_dns_target_ours
+        PrivateDnsTarget.OTHER_HOSTNAME -> R.string.home_private_dns_target_other
+        PrivateDnsTarget.UNKNOWN_HOSTNAME -> R.string.home_private_dns_target_unknown
+        PrivateDnsTarget.NOT_STRICT -> return
+    }
+    val detailRes = when (target) {
+        PrivateDnsTarget.OUR_HOSTNAME -> R.string.home_private_dns_detail_ours
+        PrivateDnsTarget.OTHER_HOSTNAME -> R.string.home_private_dns_detail_other
+        PrivateDnsTarget.UNKNOWN_HOSTNAME -> R.string.home_private_dns_detail_unknown
+        PrivateDnsTarget.NOT_STRICT -> return
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -290,14 +304,20 @@ private fun PrivateDnsNoticeCard() {
             )
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = stringResource(R.string.home_private_dns_hostname_title),
+                    text = stringResource(titleRes),
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
                 )
                 Text(
-                    text = stringResource(R.string.home_private_dns_hostname_notice),
+                    text = stringResource(detailRes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    // Never claims the system's private DNS validated: the app cannot read that.
+                    text = stringResource(R.string.home_private_dns_validation_unknown),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f)
                 )
             }
         }

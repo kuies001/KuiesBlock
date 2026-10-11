@@ -6,11 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
+import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -139,6 +141,29 @@ class KuiesVpnService : VpnService() {
     private var connectivity: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var underlyingNetwork: Network? = null
+
+    /**
+     * The declaration actually installed, or null when no tunnel is running. The Private DNS change
+     * handler compares against it, so an identical, coalesced or stale notification cannot rebuild.
+     */
+    private var appliedDeclaration: TunnelDeclaration? = null
+
+    private var privateDnsObserver: ContentObserver? = null
+
+    /**
+     * Debounced reaction to Android's Private DNS setting changing while protection runs. Both keys
+     * can change together and some ROMs notify more than once, so repeats are collapsed into one
+     * evaluation; the evaluation itself is a pure comparison, so it still cannot rebuild by itself.
+     */
+    private val privateDnsChangeRunner = Runnable { handlePrivateDnsChange() }
+
+    private val privateDnsObserverCallback = object : ContentObserver(mainHandler) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            if (!running) return
+            mainHandler.removeCallbacks(privateDnsChangeRunner)
+            mainHandler.postDelayed(privateDnsChangeRunner, PRIVATE_DNS_CHANGE_DEBOUNCE_MILLIS)
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -297,11 +322,13 @@ class KuiesVpnService : VpnService() {
         } else {
             DnsPath.SYSTEM_PRIVATE_DNS
         }
+        appliedDeclaration = declaration
         workers = newWorkerPool()
         // Re-assert the underlying network now that the tunnel exists.
         underlyingNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
 
         registerUnderlyingNetworkCallback()
+        registerPrivateDnsObserver()
         startReaderThread(plan)
         timeline.mark("tunnelReady")
         verifyDnsRoundTrip()
@@ -782,6 +809,8 @@ class KuiesVpnService : VpnService() {
         }
 
         unregisterNetworkCallback()
+        unregisterPrivateDnsObserver()
+        appliedDeclaration = null
         underlyingNetwork = null
         probeAttempts = 0
         startupBudget = null
@@ -798,6 +827,70 @@ class KuiesVpnService : VpnService() {
         if (manager != null && callback != null) {
             runCatching { manager.unregisterNetworkCallback(callback) }
         }
+    }
+
+    private fun registerPrivateDnsObserver() {
+        unregisterPrivateDnsObserver()
+        val observer = privateDnsObserverCallback
+        try {
+            // One observer on both keys: the mode and the specifier can change together.
+            PrivateDnsSettings.observedUris().forEach { uri ->
+                contentResolver.registerContentObserver(uri, false, observer)
+            }
+            privateDnsObserver = observer
+        } catch (exception: Exception) {
+            // A device that refuses the registration simply falls back to re-reading the setting on
+            // the next start; nothing about the running tunnel depends on this observer.
+            Log.w(TAG, "Could not watch the Private DNS setting: ${exception.javaClass.simpleName}")
+        }
+    }
+
+    private fun unregisterPrivateDnsObserver() {
+        val observer = privateDnsObserver
+        privateDnsObserver = null
+        if (observer != null) {
+            runCatching { contentResolver.unregisterContentObserver(observer) }
+        }
+    }
+
+    /**
+     * Re-reads Android's Private DNS setting and reacts only to a real change in the tunnel
+     * declaration. A repeated notification, a late callback after a stop, or a mere rename of the
+     * strict hostname all leave the running tunnel untouched.
+     */
+    private fun handlePrivateDnsChange() {
+        if (!running) return
+        val strict = PrivateDnsSettings.read(this).isStrictHostname
+        val mode = DnsExperiment.mode(this, strict)
+        if (mode == DnsExperimentMode.E1_REAL_DOT_ADDRESS) {
+            // E1 needs a blocking bootstrap to know its declaration; leave it alone rather than run
+            // a network lookup from a settings callback.
+            logStartupDebug("privateDnsChange skipped under the E1 experiment")
+            return
+        }
+        val candidate = DnsExperimentPlanner.declarationFor(mode, VpnRoutePlan.DEFAULT, realDotAddress = null)
+        when (PrivateDnsCoexistencePolicy.classify(appliedDeclaration, candidate)) {
+            PrivateDnsChange.NONE ->
+                logStartupDebug("privateDnsChange ignored: no running tunnel or unusable candidate")
+            PrivateDnsChange.REFRESH_STATUS ->
+                logStartupDebug("privateDnsChange: declaration unchanged, no restart")
+            PrivateDnsChange.RESTART_TUNNEL -> {
+                Log.i(TAG, "Private DNS mode changed; re-establishing the tunnel with a new declaration.")
+                restartTunnel()
+            }
+        }
+    }
+
+    /**
+     * Re-establishes the tunnel with the declaration the current setting needs. It reuses the tested
+     * teardown/start paths, so pending probes and workers are cancelled first. It only runs while
+     * protection is on, and ACTION_STOP still wins because a stop clears the running flag before
+     * this can be reached.
+     */
+    private fun restartTunnel() {
+        if (!running) return
+        teardown()
+        startProtection()
     }
 
     private fun startForegroundCompat(notification: Notification) {
@@ -841,6 +934,13 @@ class KuiesVpnService : VpnService() {
 
         /** Keeps the debug dedup set bounded even if many distinct flows are dropped. */
         private const val MAX_LOGGED_DROP_DETAILS = 128
+
+        /**
+         * Coalesces the burst of notifications a single Private DNS change can produce (the mode and
+         * the specifier, sometimes more than once). Short enough to feel immediate, long enough that
+         * one change is evaluated once.
+         */
+        private const val PRIVATE_DNS_CHANGE_DEBOUNCE_MILLIS = 400L
 
         @Volatile
         var isRunning: Boolean = false

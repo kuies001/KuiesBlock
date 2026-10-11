@@ -15,8 +15,13 @@
     <string name="action_cancel_starting">取消啟用</string>
     <string name="action_enable_protection">啟用防護</string>
     <string name="action_retry_protection">重試啟用</string>
-    <string name="home_private_dns_hostname_title">系統私人 DNS 指定主機名稱</string>
-    <string name="home_private_dns_hostname_notice">這個模式較嚴格：KuiesBlock 會保留 VPN，但由系統自己對 dns.kuies.tw 進行加密解析，KuiesBlock 不攔截查詢，查詢統計因此為「無資料」。廣告過濾仍由同一個 AdGuard Home 提供。</string>
+    <string name="home_private_dns_target_ours">系統私人 DNS：dns.kuies.tw</string>
+    <string name="home_private_dns_detail_ours">解析由系統加密處理，過濾仍由同一個 AdGuard Home 提供。KuiesBlock 未攔截查詢，統計為「無資料」。</string>
+    <string name="home_private_dns_target_other">系統私人 DNS：其他服務</string>
+    <string name="home_private_dns_detail_other">KuiesBlock 未攔截查詢，統計為「無資料」；過濾由該服務決定，KuiesBlock 無法確認。</string>
+    <string name="home_private_dns_target_unknown">系統私人 DNS：主機名稱未知</string>
+    <string name="home_private_dns_detail_unknown">KuiesBlock 未攔截查詢，統計為「無資料」；過濾來源無法確認。</string>
+    <string name="home_private_dns_validation_unknown">系統私人 DNS 的驗證狀態 KuiesBlock 無法得知。</string>
 
     <string name="protection_error_tun">無法建立本機 VPN 介面</string>
     <string name="protection_error_network">找不到可用的網路</string>

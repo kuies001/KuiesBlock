@@ -3,6 +3,8 @@ package tw.kuies.block.ui
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.database.ContentObserver
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -70,6 +72,20 @@ fun KuiesBlockApp(
     DisposableEffect(Unit) {
         DnsStatsRepository.attach(appContext)
         onDispose { executor.shutdownNow() }
+    }
+
+    DisposableEffect(appContext) {
+        // Display-only refresh. The running tunnel watches the same setting on its own, so this
+        // never rebuilds the VPN; it only keeps the notice card truthful while the app is visible.
+        val observer = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                privateDns = PrivateDnsSettings.read(appContext)
+            }
+        }
+        PrivateDnsSettings.observedUris().forEach { uri ->
+            appContext.contentResolver.registerContentObserver(uri, false, observer)
+        }
+        onDispose { appContext.contentResolver.unregisterContentObserver(observer) }
     }
 
     val vpnConsentLauncher = rememberLauncherForActivityResult(

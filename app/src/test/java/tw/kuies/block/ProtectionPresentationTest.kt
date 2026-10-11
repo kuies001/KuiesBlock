@@ -76,7 +76,8 @@ class ProtectionPresentationTest {
         assertTrue("label=$label", label.contains("未攔截"))
         assertTrue("label=$label", !label.contains("攔截中"))
         assertTrue("description=$description", description.contains("系統私人 DNS"))
-        assertTrue("description=$description", description.contains("無資料"))
+        assertTrue("description=$description", description.contains("未攔截"))
+        assertTrue("description=$description", !description.contains("攔截中"))
         assertTrue("description=$description", !description.contains("已透過加密的 DoH"))
     }
 

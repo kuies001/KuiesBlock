@@ -4,6 +4,7 @@ import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
+import tw.kuies.block.dns.PrivateDnsState
 
 /**
  * How urgent the primary protection button should look.
@@ -25,6 +26,16 @@ enum class ProtectionActionTone {
 
 /** The Material 3 colour roles the protection button is allowed to use. */
 enum class ProtectionActionColorRole { PRIMARY, SECONDARY_CONTAINER, ERROR_CONTAINER }
+
+/**
+ * Which private DNS service the system is actually pinned to, as far as it can be read.
+ *
+ * Only [OUR_HOSTNAME] may be described as filtered by AdGuard Home; [OTHER_HOSTNAME] and
+ * [UNKNOWN_HOSTNAME] are services KuiesBlock knows nothing about and must never vouch for. The
+ * device's own validation state is intentionally not represented: the app has no reliable way to
+ * read it, so it is never claimed.
+ */
+enum class PrivateDnsTarget { NOT_STRICT, OUR_HOSTNAME, OTHER_HOSTNAME, UNKNOWN_HOSTNAME }
 
 /**
  * Pure mapping from [ProtectionState] to the wording shown on the home screen.
@@ -55,10 +66,8 @@ object ProtectionPresentation {
         ProtectionState.STARTING ->
             "正在建立本機 VPN 並確認 DNS 往返正常，尚未開始攔截。"
         ProtectionState.ACTIVE -> if (dnsPath == DnsPath.SYSTEM_PRIVATE_DNS) {
-            // Strict Private DNS keeps the encrypted path for itself, so say so instead of implying
-            // that an active tunnel means intercepted queries.
-            "系統私人 DNS 已接管加密解析：VPN 仍運作，但 KuiesBlock 未攔截查詢，因此查詢統計為「無資料」；" +
-                "過濾仍由 dns.kuies.tw 提供。"
+            // Kept short on purpose; the notice card carries the detail.
+            "DNS 交由系統私人 DNS 處理；KuiesBlock 未攔截查詢。"
         } else {
             "系統 DNS 查詢已透過加密的 DoH 送往 dns.kuies.tw，一般網路流量不受影響。"
         }
@@ -106,6 +115,17 @@ object ProtectionPresentation {
         state == ProtectionState.STARTING -> "準備中"
         state == ProtectionState.ERROR -> "防護異常"
         else -> "尚未攔截"
+    }
+
+    /**
+     * Pure classification of what the system's Private DNS is pinned to. Only [PrivateDnsTarget.OUR_HOSTNAME]
+     * lets the UI say AdGuard Home is still filtering.
+     */
+    fun privateDnsTarget(state: PrivateDnsState, ourHost: String): PrivateDnsTarget = when {
+        !state.isStrictHostname -> PrivateDnsTarget.NOT_STRICT
+        state.pinsHostname(ourHost) -> PrivateDnsTarget.OUR_HOSTNAME
+        state.hostname.isNullOrBlank() -> PrivateDnsTarget.UNKNOWN_HOSTNAME
+        else -> PrivateDnsTarget.OTHER_HOSTNAME
     }
 
     fun errorLabel(error: ProtectionError): String = when (error) {

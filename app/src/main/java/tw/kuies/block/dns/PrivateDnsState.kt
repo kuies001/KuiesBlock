@@ -1,6 +1,7 @@
 package tw.kuies.block.dns
 
 import android.content.Context
+import android.net.Uri
 import android.provider.Settings
 
 /** Android's Private DNS (DoT) mode. */
@@ -60,6 +61,20 @@ object PrivateDnsSettings {
      */
     private const val PRIVATE_DNS_MODE_KEY = "private_dns_mode"
     private const val PRIVATE_DNS_SPECIFIER_KEY = "private_dns_specifier"
+
+    /**
+     * The global keys whose change can move the effective DNS path. Exposed so the service and the
+     * UI observe exactly the same two keys instead of each hard-coding them.
+     *
+     * Observing them is how AOSP itself tracks this setting (DnsManager, owned by
+     * ConnectivityService). Two caveats shape the design: an observer only fires while the process
+     * is alive and registered, and a multi-user change needs `UserHandle.USER_ALL`; both are
+     * handled by re-reading the setting on every start as well.
+     */
+    val OBSERVED_GLOBAL_KEYS: List<String> = listOf(PRIVATE_DNS_MODE_KEY, PRIVATE_DNS_SPECIFIER_KEY)
+
+    /** `content://settings/global/<key>` for every observed key. */
+    fun observedUris(): List<Uri> = OBSERVED_GLOBAL_KEYS.map { Settings.Global.getUriFor(it) }
 
     /** Pure mapping so the interpretation is testable without a device. */
     fun modeOf(rawMode: String?): PrivateDnsMode = when (rawMode?.trim()?.lowercase()) {
