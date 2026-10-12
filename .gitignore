@@ -35,6 +35,9 @@ captures/
 .env.*
 secrets.properties
 
+# === 真機測試診斷產物（只留在本機比對，不進版控）===
+/artifacts/
+
 # === 記錄檔、暫存檔 ===
 *.log
 *.hprof
