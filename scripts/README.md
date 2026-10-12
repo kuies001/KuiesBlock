@@ -50,7 +50,9 @@ adb -s <USB 序號> install -r app\build\outputs\apk\debug\app-debug.apk
 - `dumpsys-connectivity.txt`、`connectivity-<階段>.txt`：每個階段的完整網路狀態
 - `settings-<階段>.json`：私人 DNS、飛航、Wi-Fi、行動數據、always-on VPN 快照
 - `wifi-<階段>.txt`：`cmd wifi status`
-- `logcat-<階段>.txt`：預設只含 `Kuies|DnsDiagnostics|AndroidRuntime|ActivityManager`
+- `logcat-<階段>.txt`：以 tag 過濾（`-s`：`KuiesVpnService`、`DnsDiagnostics` 等 App tag；網路切換的步驟再加上
+  `ConnectivityService`／`DnsManager`／`Vpn`／`Wifi*` 等系統 tag）。**此裝置的 `logcat -e` 只比對訊息內容、
+  不比對 tag，所以不能用 `-e` 做 tag 過濾**，否則 App 自己的 log 不會被收進來。
 - `ui-*.xml`：UI 階層（UI 自動化失敗時可事後查看實際畫面結構）
 - 情境專屬檔：`private-dns-observations.json`、`dns-declarations.json`、`network-steps.json`
 

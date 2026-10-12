@@ -14,9 +14,11 @@ $script:KuiesSerial = $null
 $script:KuiesRunDir = $null
 $script:KuiesChecks = New-Object System.Collections.ArrayList
 $script:KuiesAppId = 'tw.kuies.block'
-$script:KuiesTagFilter = 'Kuies|DnsDiagnostics|AndroidRuntime|ActivityManager'
+# 實測：此裝置的 `logcat -e` 只比對「訊息內容」、不比對 tag，所以 tag 過濾一定要用 -s（tag 清單），
+# 否則 App 自己的 log（訊息裡不含這些關鍵字）永遠不會被收進 artifacts。
+$script:KuiesAppLogTags = 'KuiesVpnService,KuiesBlockApp,KuiesDnsExperiment,DnsDiagnostics'
 # 只有在診斷網路行為時才額外抓取的系統 tag（只留在本機，不上傳）。
-$script:KuiesSystemTagFilter = 'ConnectivityService|DnsManager|NetworkMonitor|Vpn|WifiClientModeImpl|WifiServiceImpl|WifiConfigManager'
+$script:KuiesSystemLogTags = 'ConnectivityService,DnsManager,NetworkMonitor,Vpn,WifiClientModeImpl,WifiServiceImpl,WifiConfigManager'
 
 function Initialize-KuiesTest {
     param([string]$AdbPath, [string]$Serial)
@@ -318,14 +320,10 @@ function Save-KuiesLogcat {
     if ($Full) {
         $command = 'logcat -d -v threadtime -b main -b system'
     } else {
-        $filter = $script:KuiesTagFilter
-        # 系統網路 tag 記在 system buffer，只讀 main 會什麼都抓不到。
-        $buffers = '-b main'
-        if ($SystemNetworkTags) {
-            $filter = "$filter|$($script:KuiesSystemTagFilter)"
-            $buffers = '-b main -b system'
-        }
-        $command = "logcat -d -v threadtime $buffers -e '$filter'"
+        # tag 過濾用 -s：App 的 log 與系統網路 tag 分別記在 main/system buffer，兩個都要讀。
+        $tags = $script:KuiesAppLogTags
+        if ($SystemNetworkTags) { $tags = "$tags,$($script:KuiesSystemLogTags)" }
+        $command = "logcat -d -v threadtime -b main -b system -s $tags"
     }
     $result = Invoke-KuiesShell $command -AllowFailure
     Save-KuiesText -Name $FileName -Content $result.Text -Directory $Directory | Out-Null
