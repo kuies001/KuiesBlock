@@ -53,6 +53,17 @@ enum class DnsProtocol(
 
         fun fromStorageKey(key: String?): DnsProtocol =
             entries.firstOrNull { it.storageKey == key } ?: DEFAULT
+
+        /**
+         * The transport to actually run, given what an install has stored.
+         *
+         * Only DoH is implemented, and the settings screen no longer lets a user choose, so a value
+         * written by the v0.2.x picker ("dot", "plain") must not be able to leave protection
+         * permanently unable to start with no way back from the UI. The stored value therefore no
+         * longer decides the transport — this is the one place that does.
+         */
+        fun implementedOrDoh(stored: DnsProtocol?): DnsProtocol =
+            stored?.takeIf { it == DOH } ?: DEFAULT
     }
 }
 

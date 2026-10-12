@@ -31,6 +31,18 @@ class DnsConfigTest {
     }
 
     @Test
+    fun aTransportStoredByTheRemovedPickerCannotLeaveProtectionUnstartable() {
+        // v0.2.x let the settings screen store DoT / plaintext / 尚未選擇, and the service refuses to
+        // start on anything but DoH. The picker is gone, so the stored value must not decide the
+        // transport any more — otherwise such an install could never start protection again.
+        assertEquals(DnsProtocol.DOH, DnsProtocol.implementedOrDoh(DnsProtocol.DOT))
+        assertEquals(DnsProtocol.DOH, DnsProtocol.implementedOrDoh(DnsProtocol.PLAINTEXT))
+        assertEquals(DnsProtocol.DOH, DnsProtocol.implementedOrDoh(DnsProtocol.UNCONFIRMED))
+        assertEquals(DnsProtocol.DOH, DnsProtocol.implementedOrDoh(null))
+        assertEquals(DnsProtocol.DOH, DnsProtocol.implementedOrDoh(DnsProtocol.DOH))
+    }
+
+    @Test
     fun encryptionFlagsAndPortsMatchTheProtocols() {
         assertTrue(DnsProtocol.DOH.encrypted)
         assertTrue(DnsProtocol.DOT.encrypted)

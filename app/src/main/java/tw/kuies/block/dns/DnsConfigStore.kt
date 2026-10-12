@@ -13,7 +13,11 @@ class DnsConfigStore(context: Context) {
 
     fun load(): DnsConfig = DnsConfig(
         host = prefs.getString(KEY_HOST, null)?.takeIf { it.isNotBlank() } ?: DnsConfig.DEFAULT_HOST,
-        protocol = DnsProtocol.fromStorageKey(prefs.getString(KEY_PROTOCOL, null)),
+        // The stored transport is clamped to the implemented one: an install carrying a value from
+        // the removed picker must not be stuck with protection that can never start.
+        protocol = DnsProtocol.implementedOrDoh(
+            DnsProtocol.fromStorageKey(prefs.getString(KEY_PROTOCOL, null))
+        ),
         dohPath = prefs.getString(KEY_DOH_PATH, null)?.takeIf { it.isNotBlank() }
             ?: DnsConfig.DEFAULT_DOH_PATH
     )
