@@ -140,7 +140,20 @@ class KuiesVpnService : VpnService() {
 
     private var connectivity: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var underlyingNetwork: Network? = null
+
+    /**
+     * Every non-VPN network the callback has reported, and the network the tunnel is currently
+     * declared to ride on. Main thread only: everything that touches them already runs on
+     * [mainHandler], and teardown clears both so a stopped tunnel keeps nothing.
+     */
+    private val detectedUnderlying = HashMap<Long, UnderlyingNetworkInfo>()
+    private var appliedUnderlying: UnderlyingNetworkInfo? = null
+
+    /**
+     * The network this start was planned with. It is declared to the system in [establishAndServe],
+     * because `setUnderlyingNetworks` only succeeds once the tunnel exists.
+     */
+    private var startupUnderlying: UnderlyingNetworkInfo? = null
 
     /**
      * The declaration actually installed, or null when no tunnel is running. The Private DNS change
@@ -226,8 +239,10 @@ class KuiesVpnService : VpnService() {
             requestFailOpen(ProtectionError.NO_UNDERLYING_NETWORK)
             return
         }
-        underlyingNetwork = underlying.network
-        setUnderlyingNetworks(arrayOf(underlying.network))
+        // Recorded, not yet declared: VpnService.setUnderlyingNetworks only succeeds once the VPN is
+        // established, so the tunnel declares this in establishAndServe(), right after establish().
+        startupUnderlying = underlying
+        detectedUnderlying[underlying.candidate.handle] = underlying
         timeline.mark("underlyingReady")
 
         // Validate the transport before creating a tunnel we could not serve.
@@ -345,9 +360,9 @@ class KuiesVpnService : VpnService() {
                 "generation=$tunnelGeneration"
         )
         workers = newWorkerPool()
-        // Re-assert the underlying network now that the tunnel exists.
-        underlyingNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
-
+        // The tunnel exists now, so the upstream network can be declared for real, and from here on
+        // it is kept aligned with the network the system is actually using.
+        declareUnderlyingNetwork(startupUnderlying)
         registerUnderlyingNetworkCallback()
         registerPrivateDnsObserver()
         startReaderThread(plan)
@@ -426,19 +441,48 @@ class KuiesVpnService : VpnService() {
 
     // --- underlying network changes -----------------------------------------------------------
 
+    /**
+     * Declares [info] as the network the tunnel uses upstream. The result is checked: the system
+     * refuses the call unless the VPN is established, and a refusal has to stay visible — an
+     * unaccepted declaration is not recorded as applied, so the next event retries it.
+     */
+    private fun declareUnderlyingNetwork(info: UnderlyingNetworkInfo?) {
+        val network = info?.network ?: return
+        if (setUnderlyingNetworks(arrayOf(network))) {
+            appliedUnderlying = info
+        } else {
+            appliedUnderlying = null
+            Log.w(TAG, "The system did not accept the underlying network for the tunnel.")
+        }
+    }
+
+    /**
+     * Watches every non-VPN network with internet access. Which of them the tunnel uses is decided
+     * afterwards by [UnderlyingNetworkPolicy], not by the order the events arrive in.
+     */
     private fun registerUnderlyingNetworkCallback() {
         val manager = connectivity ?: return
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
+        val generation = tunnelGeneration
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                onUnderlyingNetworkChanged(network, manager.getLinkProperties(network))
+                onUnderlyingNetworkEvent(generation, network)
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Validation and metering are part of the ranking, so this event can move the tunnel.
+                onUnderlyingNetworkEvent(generation, network)
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                onUnderlyingNetworkChanged(network, linkProperties)
+                onUnderlyingNetworkEvent(generation, network)
+            }
+
+            override fun onLost(network: Network) {
+                onUnderlyingNetworkLost(generation, network)
             }
         }
         try {
@@ -449,20 +493,74 @@ class KuiesVpnService : VpnService() {
         }
     }
 
-    private fun onUnderlyingNetworkChanged(network: Network, linkProperties: LinkProperties?) {
-        val servers = UnderlyingNetworkFinder.dnsServersOf(linkProperties)
+    /**
+     * One non-VPN network was reported or changed. The event only refreshes what we know about that
+     * network; the network the tunnel rides on is chosen from the whole set afterwards, so a
+     * cellular link-property update can no longer displace the Wi-Fi network the system is using.
+     */
+    private fun onUnderlyingNetworkEvent(generation: Int, network: Network) {
+        val manager = connectivity ?: return
+        val detected = UnderlyingNetworkFinder.detect(manager, network) ?: return
         mainHandler.post {
-            if (!running) return@post
-            val previous = underlyingNetwork
-            underlyingNetwork = network
-            setUnderlyingNetworks(arrayOf(network))
-            if (servers.isEmpty()) return@post
-            // A Wi-Fi/mobile switch invalidates the old connections, so rebuild the transport.
-            rebuildTransport(servers)
-            if (previous != network) {
-                Log.i(TAG, "Underlying network changed; re-bootstrapping DoH.")
-            }
+            if (!UnderlyingNetworkPolicy.isCurrentEvent(running, generation, tunnelGeneration)) return@post
+            detectedUnderlying[detected.candidate.handle] = detected
+            alignUnderlyingNetwork("event")
         }
+    }
+
+    private fun onUnderlyingNetworkLost(generation: Int, network: Network) {
+        val handle = network.networkHandle
+        mainHandler.post {
+            if (!UnderlyingNetworkPolicy.isCurrentEvent(running, generation, tunnelGeneration)) return@post
+            if (detectedUnderlying.remove(handle) == null) return@post
+            alignUnderlyingNetwork("lost")
+        }
+    }
+
+    /**
+     * Applies the policy's answer, and only when it actually changed: the same network reached
+     * through the same DNS servers leaves both the declaration and the DoH transport alone, so a
+     * burst of callbacks cannot rebuild anything, while a real switch re-declares the network and
+     * rebuilds the transport once.
+     */
+    private fun alignUnderlyingNetwork(trigger: String) {
+        val manager = connectivity ?: return
+        val decision = UnderlyingNetworkPolicy.decide(
+            candidates = detectedUnderlying.values.map { it.candidate },
+            current = appliedUnderlying?.candidate,
+            systemDefault = UnderlyingNetworkFinder.activeDetected(manager)?.candidate
+        )
+        val chosen = decision.candidate
+        if (chosen == null) {
+            Log.w(TAG, "No non-VPN network is available for the tunnel ($trigger).")
+            return
+        }
+        val detected = detectedUnderlying[chosen.handle] ?: return
+        val applied = appliedUnderlying
+        if (!UnderlyingNetworkPolicy.upstreamChangeRequired(
+                appliedNetworkHandle = applied?.network?.networkHandle,
+                appliedDnsServers = applied?.dnsServers.orEmpty(),
+                chosenNetworkHandle = detected.network.networkHandle,
+                chosenDnsServers = detected.dnsServers
+            )
+        ) {
+            logStartupDebug(
+                "underlyingDiag action=keep reason=${decision.reason} chosen=${UnderlyingNetworkPolicy.describe(chosen)} trigger=$trigger"
+            )
+            return
+        }
+        declareUnderlyingNetwork(detected)
+        Log.i(
+            TAG,
+            "Underlying network changed; re-bootstrapping DoH " +
+                "(${UnderlyingNetworkPolicy.describe(chosen)}, reason=${decision.reason}, on=$trigger)."
+        )
+        if (detected.dnsServers.isEmpty()) {
+            Log.w(TAG, "The underlying network declares no DNS servers; keeping the current DoH bootstrap.")
+            return
+        }
+        // The new network invalidates the old connections, so the transport is rebuilt.
+        rebuildTransport(detected.dnsServers)
     }
 
     private fun rebuildTransport(dnsServers: List<InetSocketAddress>) {
@@ -835,7 +933,11 @@ class KuiesVpnService : VpnService() {
         unregisterNetworkCallback()
         unregisterPrivateDnsObserver()
         appliedDeclaration = null
-        underlyingNetwork = null
+        // Nothing about the upstream survives a stop: a late event must not re-declare a network,
+        // and the next start has to look again.
+        startupUnderlying = null
+        appliedUnderlying = null
+        detectedUnderlying.clear()
         probeAttempts = 0
         startupBudget = null
         startupTimeline = null
