@@ -9,6 +9,7 @@ import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConnectionScenario
 import tw.kuies.block.dns.DnsEndpointProbe
 import tw.kuies.block.dns.DnsProbeFailure
+import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.ui.DnsPresentation
 
@@ -65,6 +66,40 @@ class DnsPresentationTest {
     fun everyStatusHasALabel() {
         DnsCheckStatus.entries.forEach { status ->
             assertTrue(DnsPresentation.statusLabel(status).isNotBlank())
+        }
+    }
+
+    /**
+     * The diagnostic wording is rendered on the settings screen. It may describe an outcome, but it
+     * must not print the DNS host or the DoH endpoint: the endpoint stays internal to the app.
+     */
+    @Test
+    fun noDiagnosticWordingPrintsTheHostOrTheEndpoint() {
+        val forbidden = listOf("kuies.tw", "dns-query", "https://", "http://")
+        val wording = buildList {
+            DnsCheckStatus.entries.forEach { add(DnsPresentation.statusLabel(it)) }
+            DnsProbeFailure.entries.forEach { add(DnsPresentation.probeFailureLabel(it)) }
+            add(DnsPresentation.resolutionFailureLabel())
+            DnsConnectionScenario.entries.forEach { add(DnsPresentation.scenarioLabel(it)) }
+            PrivateDnsMode.entries.forEach { add(DnsPresentation.privateDnsLabel(it)) }
+            add(
+                DnsPresentation.privateDnsMatchLabel(
+                    PrivateDnsSettings.stateOf("hostname", "dns.kuies.tw"),
+                    "dns.kuies.tw"
+                ).orEmpty()
+            )
+            add(DnsPresentation.probeSummary(probe(true, true, true, null)))
+            add(DnsPresentation.probeSummary(probe(false, false, false, DnsProbeFailure.CONNECTION_FAILED)))
+            DnsConnectionScenario.entries.forEach {
+                add(DnsPresentation.scenarioLabel(it))
+                add(DnsPresentation.scenarioShortHint(it).orEmpty())
+            }
+        }
+        wording.forEach { text ->
+            forbidden.forEach { token ->
+                assertFalse("leaked '$token': $text", text.contains(token))
+            }
+            assertNoLeak(text)
         }
     }
 

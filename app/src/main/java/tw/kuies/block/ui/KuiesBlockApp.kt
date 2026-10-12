@@ -3,8 +3,6 @@ package tw.kuies.block.ui
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
-import android.database.ContentObserver
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -24,20 +22,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import tw.kuies.block.core.DnsPath
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
 import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
-import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsConfigStore
-import tw.kuies.block.dns.DnsConnectionScenarioPolicy
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsDiagnostics
-import tw.kuies.block.dns.DnsProtocol
-import tw.kuies.block.dns.PrivateDnsSettings
-import tw.kuies.block.dns.PrivateDnsState
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.vpn.KuiesVpnService
@@ -64,28 +56,15 @@ fun KuiesBlockApp(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var destination by remember { mutableStateOf(BlockDestination.HOME) }
-    var dnsConfig by remember { mutableStateOf(dnsStore.load()) }
+    // Read once: with the transport picker gone there is nothing on screen that changes it. The
+    // stored configuration still drives the tunnel and the diagnostic below.
+    val dnsConfig = remember { dnsStore.load() }
     var dnsReport by remember { mutableStateOf(DnsDiagnosticReport.notChecked(dnsConfig.host, dnsConfig.protocol)) }
     var dnsChecking by remember { mutableStateOf(false) }
-    var privateDns by remember { mutableStateOf(PrivateDnsState.UNKNOWN) }
 
     DisposableEffect(Unit) {
         DnsStatsRepository.attach(appContext)
         onDispose { executor.shutdownNow() }
-    }
-
-    DisposableEffect(appContext) {
-        // Display-only refresh. The running tunnel watches the same setting on its own, so this
-        // never rebuilds the VPN; it only keeps the notice card truthful while the app is visible.
-        val observer = object : ContentObserver(mainHandler) {
-            override fun onChange(selfChange: Boolean, uri: Uri?) {
-                privateDns = PrivateDnsSettings.read(appContext)
-            }
-        }
-        PrivateDnsSettings.observedUris().forEach { uri ->
-            appContext.contentResolver.registerContentObserver(uri, false, observer)
-        }
-        onDispose { appContext.contentResolver.unregisterContentObserver(observer) }
     }
 
     val vpnConsentLauncher = rememberLauncherForActivityResult(
@@ -123,7 +102,6 @@ fun KuiesBlockApp(
     fun syncEnvironment() {
         val granted = VpnAuthorization.isGranted(appContext)
         settingsStore.setVpnAuthorizationGranted(granted)
-        privateDns = PrivateDnsSettings.read(appContext)
         DnsStatsRepository.refresh()
         when {
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
@@ -207,51 +185,24 @@ fun KuiesBlockApp(
 
     val protectionState = ProtectionStatusHolder.state
     val protectionError = ProtectionStatusHolder.error
-    val dnsPath = ProtectionStatusHolder.dnsPath
-    val blockStats = DnsStatsRepository.today
-    val dnsStatus = when {
-        dnsChecking -> DnsCheckStatus.CHECKING
-        // In the strict Private DNS case our tunnel is not the resolver, so never assert OK for it;
-        // fall back to the measured diagnostic report instead.
-        protectionState == ProtectionState.ACTIVE && dnsPath == DnsPath.SYSTEM_PRIVATE_DNS -> dnsReport.status
-        ProtectionStateRules.isInterceptionActive(protectionState) -> DnsCheckStatus.OK
-        protectionState == ProtectionState.ERROR -> DnsCheckStatus.ERROR
-        else -> dnsReport.status
-    }
-    val dnsScenario = DnsConnectionScenarioPolicy.scenarioOf(dnsStatus, privateDns.mayBypassInterception)
 
+    // The home screen renders the running state and nothing about DNS: no status derivation, no
+    // counters. `ProtectionStatusHolder.state` is what the service last reported, so a claim of
+    // 「防護已啟用」 can only come from the tunnel that really came up and verified its DNS path.
     when (destination) {
         BlockDestination.HOME -> HomeScreen(
             protectionState = protectionState,
             protectionError = protectionError,
-            blockStats = blockStats,
-            dnsScenario = dnsScenario,
-            dnsStatus = dnsStatus,
-            dnsHost = dnsConfig.host,
-            dnsChecking = dnsChecking,
-            privateDnsState = privateDns,
             isServiceRunning = KuiesVpnService.isRunning,
-            dnsPath = dnsPath,
             onToggleProtection = { onToggleProtection() },
-            onRunDnsDiagnostics = { runDnsDiagnostics() },
             onOpenSettings = { destination = BlockDestination.SETTINGS },
             modifier = modifier
         )
 
         BlockDestination.SETTINGS -> SettingsScreen(
-            dnsConfig = dnsConfig,
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
-            dnsScenario = dnsScenario,
-            privateDns = privateDns,
-            blockStats = blockStats,
             appVersion = appVersion,
-            onSelectProtocol = { protocol ->
-                val updated = dnsConfig.copy(protocol = protocol)
-                dnsConfig = updated
-                dnsStore.save(updated)
-                dnsReport = DnsDiagnosticReport.notChecked(updated.host, updated.protocol)
-            },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier

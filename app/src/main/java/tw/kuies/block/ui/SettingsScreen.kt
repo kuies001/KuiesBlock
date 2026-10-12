@@ -5,14 +5,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -20,39 +16,31 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
-import tw.kuies.block.data.BlockStats
 import tw.kuies.block.dns.DnsCheckStatus
-import tw.kuies.block.dns.DnsConfig
-import tw.kuies.block.dns.DnsConnectionScenario
 import tw.kuies.block.dns.DnsDiagnosticReport
-import tw.kuies.block.dns.DnsProtocol
 import tw.kuies.block.dns.DnsResolutionState
-import tw.kuies.block.dns.PrivateDnsState
-import tw.kuies.block.doh.DohEndpointOutcome
-import tw.kuies.block.doh.DohEndpointPolicy
 
+/**
+ * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
+ * helps when protection will not start, and the app version.
+ *
+ * There is deliberately no transport picker: KuiesBlock implements a local DoH relay only, and
+ * under strict Private DNS the DoT belongs to Android, so choosing a transport here could not do
+ * anything except mislead. Anything that is not a real, working function is left out.
+ */
 @Composable
 fun SettingsScreen(
-    dnsConfig: DnsConfig,
     dnsReport: DnsDiagnosticReport,
     dnsChecking: Boolean,
-    dnsScenario: DnsConnectionScenario,
-    privateDns: PrivateDnsState,
-    blockStats: BlockStats,
     appVersion: String,
-    onSelectProtocol: (DnsProtocol) -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -66,16 +54,11 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         SettingsHeader(onBack = onBack)
-        DnsSection(
-            dnsConfig = dnsConfig,
+        DiagnosticsSection(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
-            dnsScenario = dnsScenario,
-            privateDns = privateDns,
-            onSelectProtocol = onSelectProtocol,
             onRunDnsDiagnostics = onRunDnsDiagnostics
         )
-        StatsSection(blockStats = blockStats)
         PrivacySection()
         AboutSection(appVersion = appVersion)
     }
@@ -101,69 +84,12 @@ private fun SettingsHeader(onBack: () -> Unit) {
 }
 
 @Composable
-private fun DnsSection(
-    dnsConfig: DnsConfig,
+private fun DiagnosticsSection(
     dnsReport: DnsDiagnosticReport,
     dnsChecking: Boolean,
-    dnsScenario: DnsConnectionScenario,
-    privateDns: PrivateDnsState,
-    onSelectProtocol: (DnsProtocol) -> Unit,
     onRunDnsDiagnostics: () -> Unit
 ) {
-    SectionCard(title = stringResource(R.string.settings_dns_section)) {
-        LabeledValue(
-            label = stringResource(R.string.settings_dns_host_label),
-            value = dnsConfig.host
-        )
-        LabeledValue(
-            label = stringResource(R.string.settings_dns_endpoint_label),
-            value = when (val outcome = DohEndpointPolicy.build(dnsConfig)) {
-                is DohEndpointOutcome.Ok -> outcome.endpoint.url
-                is DohEndpointOutcome.Invalid -> "—"
-            }
-        )
-
-        if (dnsScenario != DnsConnectionScenario.UNKNOWN) {
-            ConnectionBanner(
-                scenario = dnsScenario,
-                explanation = DnsPresentation.scenarioExplanation(dnsScenario, privateDns, dnsConfig.host)
-            )
-        }
-
-        Text(
-            text = stringResource(R.string.settings_dns_protocol_label),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        DnsProtocol.entries.forEach { protocol ->
-            ProtocolRow(
-                protocol = protocol,
-                selected = protocol == dnsConfig.protocol,
-                onSelect = { onSelectProtocol(protocol) }
-            )
-        }
-        Text(
-            text = stringResource(R.string.settings_dns_protocol_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        val matchLabel = DnsPresentation.privateDnsMatchLabel(privateDns, dnsConfig.host)
-        val privateDnsValue = if (matchLabel != null) {
-            "${DnsPresentation.privateDnsLabel(privateDns.mode)}（$matchLabel）"
-        } else {
-            DnsPresentation.privateDnsLabel(privateDns.mode)
-        }
-        LabeledValue(
-            label = stringResource(R.string.settings_private_dns_label),
-            value = privateDnsValue
-        )
-        Text(
-            text = stringResource(R.string.settings_scope_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
+    SectionCard(title = stringResource(R.string.settings_diagnostics_section)) {
         Button(
             onClick = onRunDnsDiagnostics,
             enabled = !dnsChecking,
@@ -172,68 +98,6 @@ private fun DnsSection(
             Text(stringResource(R.string.action_run_dns_diagnostics))
         }
         DiagnosticResult(dnsReport = dnsReport, dnsChecking = dnsChecking)
-    }
-}
-
-@Composable
-private fun ConnectionBanner(scenario: DnsConnectionScenario, explanation: String?) {
-    val colors = dnsStatusColors(scenario)
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = colors.container,
-        contentColor = colors.content,
-        shape = MaterialTheme.shapes.medium
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Icon(
-                painter = painterResource(dnsStatusIcon(scenario)),
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = colors.accent
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = DnsPresentation.scenarioLabel(scenario),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                if (explanation != null) {
-                    Text(text = explanation, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProtocolRow(protocol: DnsProtocol, selected: Boolean, onSelect: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Column {
-            Text(
-                text = protocol.displayName,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = protocol.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 
@@ -267,27 +131,6 @@ private fun DiagnosticResult(dnsReport: DnsDiagnosticReport, dnsChecking: Boolea
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
-}
-
-@Composable
-private fun StatsSection(blockStats: BlockStats) {
-    SectionCard(title = stringResource(R.string.settings_stats_section)) {
-        Text(
-            text = stringResource(R.string.settings_stats_queries, blockStats.queriesToday),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = stringResource(R.string.settings_stats_failed, blockStats.failedToday),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = stringResource(R.string.settings_stats_blocked),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
