@@ -933,6 +933,26 @@ function Invoke-ScenarioNetworkSwitch {
             Start-Sleep -Seconds 2
         } while ((Get-Date) -lt $deadline)
 
+        # 平台在舊的底層網路消失時會先把 VPN 的 UnderlyingNetworks 清成 Null，App 隨後才重新宣告，
+        # 因此底層網路要在這裡等一個有上限的穩定期再斷言 —— 否則量到的是轉換瞬間而不是結果。
+        # 斷言本身沒有放寬：等不到仍然 FAIL，只是不再把「宣告還沒落地」誤判成失敗。
+        $transientUnderlying = $diag.vpnUnderlying
+        $carrierNetIdForWait = $diag.carrierNetId
+        if ($tunnelUp -and $carrierNetIdForWait) {
+            $settledDiag = Wait-KuiesCondition -TimeoutSeconds ([Math]::Min($TimeoutSeconds, 20)) -Description "等候 $Label 的 VPN 底層網路穩定到承載網路 netId $carrierNetIdForWait" -Condition {
+                $t = (Invoke-KuiesShell 'dumpsys connectivity --short').Text
+                $c = Get-KuiesNetworkDiagnosis -ConnectivityText $t
+                if ($c.vpnUnderlyingIds -contains $carrierNetIdForWait) { return $c }
+                return $null
+            }
+            if ($settledDiag) {
+                if ($transientUnderlying -ne $settledDiag.vpnUnderlying) {
+                    Add-KuiesNote "[$Label] 底層網路轉換瞬間為 '$transientUnderlying'，穩定後為 '$($settledDiag.vpnUnderlying)'（平台宣告更新有延遲）。"
+                }
+                $diag = $settledDiag
+            }
+        }
+
         Save-KuiesStateBundle -Label $Label -SkipLogcat | Out-Null
         # 這一步另外留下系統網路 tag 的 logcat，用來判斷底層是誰沒有更新。
         Save-KuiesLogcat -SystemNetworkTags -FileName "logcat-$Label.txt" | Out-Null
