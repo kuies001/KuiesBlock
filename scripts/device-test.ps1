@@ -31,8 +31,12 @@ param(
     # 允許執行會改變裝置狀態的步驟（VPN 啟停、私人 DNS 切換、網路切換）。
     [switch]$AllowDeviceChanges,
 
-    # protection / dns-declaration 情境：先停用佔用 VPN 位置的其他 App（目前是 AdGuard）。
+    # protection / dns-declaration / network-switch 情境：先停用佔用 VPN 位置的其他 App（目前是 AdGuard）。
     [switch]$StopOtherVpn,
+
+    # network-switch：切換網路時讓 KuiesBlock 的 tunnel 保持運作，
+    # 用來重現「行動網路 -> Wi-Fi 之後無法上網」。
+    [switch]$WithKuiesTunnel,
 
     [switch]$FullLogcat,
 
@@ -791,6 +795,102 @@ function Invoke-ScenarioDnsDeclaration {
 
 # ---------------------------------------------------------------- 情境：network-switch
 
+function Get-KuiesNetworkDiagnosis {
+    <#
+        把「現在到底哪一層壞掉」拆成可分辨的觀察值：
+          carrier  —— 實際承載網際網路的底層網路（沿 UnderlyingNetworks 追蹤）
+          wifi     —— Wi-Fi 網路是否存在並取得 INTERNET，以及它是否通過 VALIDATED
+          vpn      —— VPN 是否存在、其 UnderlyingNetworks 是否指向現存的網路
+          privateDns —— 承載網路上的私人 DNS 設定與驗證狀態
+        只回傳觀察值，判定留給呼叫端，這樣五種原因才能分別斷言。
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$ConnectivityText)
+
+    $nets = Convert-KuiesConnectivityText -Text $ConnectivityText
+    $carrier = Resolve-KuiesDnsCarrierNetwork -ConnectivityText $ConnectivityText
+    $vpn = @(Get-KuiesVpnNetworks -Text $ConnectivityText) | Select-Object -First 1
+    $wifi = @($nets | Where-Object {
+            $_.niTransport -ne 'VPN' -and $_.transports -match 'WIFI' -and $_.capabilities -match 'INTERNET'
+        }) | Select-Object -First 1
+
+    $carrierNet = $carrier.network
+    $carrierNetId = $null
+    $carrierTransports = ''
+    $carrierInterface = ''
+    $carrierCapabilities = ''
+    $carrierValidated = $false
+    $carrierUsePrivateDns = $null
+    $carrierPrivateDnsServer = ''
+    $carrierValidatedAddress = ''
+    if ($carrierNet) {
+        $carrierNetId = $carrierNet.netId
+        $carrierTransports = $carrierNet.transports
+        $carrierInterface = $carrierNet.interfaceName
+        $carrierCapabilities = $carrierNet.capabilities
+        $carrierValidated = $carrierNet.validated
+        $carrierUsePrivateDns = $carrierNet.usePrivateDns
+        $carrierPrivateDnsServer = $carrierNet.privateDnsServer
+        $carrierValidatedAddress = $carrierNet.validatedPrivateDns
+    }
+
+    $wifiNetId = $null
+    $wifiValidated = $false
+    $wifiInterface = ''
+    $wifiCapabilities = ''
+    if ($wifi) {
+        $wifiNetId = $wifi.netId
+        $wifiValidated = $wifi.validated
+        $wifiInterface = $wifi.interfaceName
+        $wifiCapabilities = $wifi.capabilities
+    }
+
+    $vpnNetId = $null
+    $vpnExtra = ''
+    $vpnUnderlying = ''
+    $vpnUnderlyingIds = @()
+    if ($vpn) {
+        $vpnNetId = $vpn.netId
+        $vpnExtra = $vpn.extra
+        $vpnUnderlying = $vpn.underlying
+        if ($vpn.underlying) {
+            $vpnUnderlyingIds = @($vpn.underlying -split ',' |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -match '^\d+$' } |
+                ForEach-Object { [int]$_ })
+        }
+    }
+    $vpnUnderlyingExists = $false
+    if ($vpnUnderlyingIds.Count -eq 1) {
+        $vpnUnderlyingExists = [bool](Get-KuiesNetworkById -Networks $nets -NetId $vpnUnderlyingIds[0])
+    }
+
+    return [pscustomobject]@{
+        defaultNetId            = Get-KuiesDefaultNetId -Text $ConnectivityText
+        carrierStatus           = $carrier.status
+        carrierReason           = $carrier.reason
+        carrierHops             = @($carrier.hops)
+        carrierNetId            = $carrierNetId
+        carrierTransports       = $carrierTransports
+        carrierInterface        = $carrierInterface
+        carrierCapabilities     = $carrierCapabilities
+        carrierValidated        = $carrierValidated
+        carrierUsePrivateDns    = $carrierUsePrivateDns
+        carrierPrivateDnsServer = $carrierPrivateDnsServer
+        carrierValidatedAddress = $carrierValidatedAddress
+        wifiConnected           = [bool]$wifi
+        wifiNetId               = $wifiNetId
+        wifiValidated           = $wifiValidated
+        wifiInterface           = $wifiInterface
+        wifiCapabilities        = $wifiCapabilities
+        vpnNetId                = $vpnNetId
+        vpnExtra                = $vpnExtra
+        vpnUnderlying           = $vpnUnderlying
+        vpnUnderlyingIds        = @($vpnUnderlyingIds)
+        vpnUnderlyingExists     = $vpnUnderlyingExists
+        networks                = $nets
+    }
+}
+
 function Invoke-ScenarioNetworkSwitch {
     Assert-KuiesDeviceChangesAllowed -Reason '本情境會關閉 Wi-Fi / 行動數據'
 
@@ -801,25 +901,122 @@ function Invoke-ScenarioNetworkSwitch {
     $originalSettings = Get-KuiesSettingMap
     $originalWifi = $originalSettings.'global:wifi_on' -eq '1'
     $originalData = $originalSettings.'global:mobile_data' -eq '1'
-    Add-KuiesNote "起始：wifi_on=$($originalSettings.'global:wifi_on') mobile_data=$($originalSettings.'global:mobile_data')"
+    $strictPrivateDns = $originalSettings.'global:private_dns_mode' -eq 'hostname'
+    Add-KuiesNote "起始：wifi_on=$($originalSettings.'global:wifi_on') mobile_data=$($originalSettings.'global:mobile_data') private_dns=$($originalSettings.'global:private_dns_mode')/$($originalSettings.'global:private_dns_specifier')"
 
     $steps = New-Object System.Collections.ArrayList
+    $tunnelUp = $false
 
-    function Invoke-KuiesSwitchStep {
+    function Measure-KuiesSwitchStep {
+        <#
+        針對每一步量測「到底是哪一層壞掉」，把五種可能原因分開成獨立斷言：
+        #   (a) Wi-Fi 未連線        (b) Wi-Fi 未通過 VALIDATED
+        #   (c) VPN 底層網路未更新  (d) 私人 DNS 驗證失敗
+        #   (e) DNS 查詢失敗
+        # 逾時也會留下量測結果，不會因為等不到就沒證據。
+        #>
         param(
-            [Parameter(Mandatory)][string]$Label
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][string]$ExpectedTransport,   # WIFI | CELLULAR | any
+            [int]$WaitSeconds = 0
         )
-        Write-Host "== 網路切換步驟：$Label ==" -ForegroundColor Cyan
-        $bundle = Save-KuiesStateBundle -Label $Label
-        $underlying = Resolve-KuiesUnderlyingNetwork -Networks $bundle.networks -DefaultNetId $bundle.defaultNetId
-        $observed = if ($underlying) { $underlying.transports } else { 'none' }
+        Write-Host "== 量測步驟：$Label（期待承載網路：$ExpectedTransport）==" -ForegroundColor Cyan
+
+        if ($WaitSeconds -le 0) { $WaitSeconds = $TimeoutSeconds }
+        $deadline = (Get-Date).AddSeconds($WaitSeconds)
+        $diag = $null
+        do {
+            $text = (Invoke-KuiesShell 'dumpsys connectivity --short').Text
+            $diag = Get-KuiesNetworkDiagnosis -ConnectivityText $text
+            if ($ExpectedTransport -eq 'any') { break }
+            if ($diag.carrierStatus -eq 'OK' -and $diag.carrierTransports -match $ExpectedTransport) { break }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $deadline)
+
+        Save-KuiesStateBundle -Label $Label -SkipLogcat | Out-Null
+        # 這一步另外留下系統網路 tag 的 logcat，用來判斷底層是誰沒有更新。
+        Save-KuiesLogcat -SystemNetworkTags -FileName "logcat-$Label.txt" | Out-Null
+        Save-KuiesText -Name "diagnosis-$Label.json" -Content ($diag | ConvertTo-Json -Depth 4) | Out-Null
+
+        $dnsProbes = @()
+        foreach ($hostName in $DnsProbeHosts) { $dnsProbes += Test-KuiesDnsResolution -HostName $hostName }
+        Save-KuiesText -Name "dns-probe-$Label.json" -Content ($dnsProbes | ConvertTo-Json -Depth 4) | Out-Null
+
+        # 私人 DNS 的驗證位址不會立刻出現，另外有上限地等一次。
+        $privateDnsValidated = ''
+        if ($strictPrivateDns -and $diag.carrierStatus -eq 'OK' -and $diag.carrierNetId) {
+            $validatedNet = Wait-KuiesCondition -TimeoutSeconds 20 -Description "等候 $Label 的私人 DNS 完成驗證" -Condition {
+                $t = (Invoke-KuiesShell 'dumpsys connectivity --short').Text
+                $c = Resolve-KuiesDnsCarrierNetwork -ConnectivityText $t
+                if ($c.status -eq 'OK' -and $c.network.validatedPrivateDns) { return $c.network }
+                return $null
+            }
+            if ($validatedNet) { $privateDnsValidated = $validatedNet.validatedPrivateDns }
+        }
+
+        # (1) 承載網路是否為期待的那一種
+        if ($diag.carrierStatus -ne 'OK') {
+            Add-KuiesCheck -Name "[$Label] 判定實際承載網路" -Passed $false -Inconclusive -Expected "承載網路為 $ExpectedTransport" -Actual "無法判定：$($diag.carrierReason)"
+        } else {
+            $carrierOk = ($ExpectedTransport -eq 'any') -or ($diag.carrierTransports -match $ExpectedTransport)
+            Add-KuiesCheck -Name "[$Label] 承載網路為 $ExpectedTransport" -Passed $carrierOk -Expected "transports 含 $ExpectedTransport" -Actual "netId=$($diag.carrierNetId) transports=$($diag.carrierTransports) iface=$($diag.carrierInterface)"
+        }
+
+        # (2)(3) Wi-Fi 是否連線、是否通過 VALIDATED —— 這兩項要分開看才分得清原因
+        if ($ExpectedTransport -eq 'WIFI') {
+            $wifiActual = '找不到帶 INTERNET 的 WIFI 網路'
+            if ($diag.wifiConnected) { $wifiActual = "netId=$($diag.wifiNetId) iface=$($diag.wifiInterface)" }
+            Add-KuiesCheck -Name "[$Label] Wi-Fi 已連線並取得 INTERNET" -Passed $diag.wifiConnected -Expected '存在帶 INTERNET 的 WIFI 網路' -Actual $wifiActual
+            Add-KuiesCheck -Name "[$Label] Wi-Fi 網路已通過 VALIDATED" -Passed $diag.wifiValidated -Expected 'Capabilities 含 VALIDATED' -Actual "validated=$($diag.wifiValidated) caps=$($diag.wifiCapabilities)"
+        }
+
+        # (4) VPN 的底層網路是否更新到現在的承載網路
+        if ($tunnelUp) {
+            if (-not $diag.vpnNetId) {
+                Add-KuiesCheck -Name "[$Label] KuiesBlock tunnel 仍在運作" -Passed $false -Expected 'tunnel 網路仍存在' -Actual 'tunnel 已消失'
+            } else {
+                Add-KuiesCheck -Name "[$Label] VPN 底層網路仍指向存在的網路" -Passed $diag.vpnUnderlyingExists -Expected 'UnderlyingNetworks 指向存在的 netId' -Actual "vpn netId=$($diag.vpnNetId) underlying='$($diag.vpnUnderlying)'"
+                if ($diag.carrierNetId) {
+                    $underlyingMatches = ($diag.vpnUnderlyingIds -contains $diag.carrierNetId)
+                    Add-KuiesCheck -Name "[$Label] VPN 底層網路已更新為實際承載網路" -Passed $underlyingMatches -Expected "underlying = netId $($diag.carrierNetId)" -Actual "underlying='$($diag.vpnUnderlying)'"
+                }
+            }
+        }
+
+        # (5) 私人 DNS 是否生效並完成驗證
+        if ($strictPrivateDns) {
+            Add-KuiesCheck -Name "[$Label] 承載網路的私人 DNS 設定生效" -Passed ($diag.carrierPrivateDnsServer -eq $PrivateDnsSpecifier) -Expected $PrivateDnsSpecifier -Actual "$($diag.carrierPrivateDnsServer)"
+            Add-KuiesCheck -Name "[$Label] 私人 DNS 已完成驗證" -Passed ([bool]$privateDnsValidated) -Expected 'ValidatedPrivateDnsAddresses 非空' -Actual "$privateDnsValidated" -Note '等待上限 20 秒'
+        }
+
+        # (6) DNS 查詢是否成功
+        foreach ($probe in $dnsProbes) {
+            Add-KuiesCheck -Name "[$Label] 系統 resolver 可解析 $($probe.host)" -Passed $probe.resolved -Expected '解析出 IP' -Actual $probe.address
+        }
+
         $steps.Add([pscustomobject]@{
-            label        = $Label
-            defaultNetId = $bundle.defaultNetId
-            underlying   = $observed
-            interfaceName = if ($underlying) { $underlying.interfaceName } else { '' }
-        }) | Out-Null
-        return [pscustomobject]@{ bundle = $bundle; underlying = $underlying; observed = $observed }
+                label                   = $Label
+                expectedTransport       = $ExpectedTransport
+                defaultNetId            = $diag.defaultNetId
+                carrierStatus           = $diag.carrierStatus
+                carrierNetId            = $diag.carrierNetId
+                carrierTransports       = $diag.carrierTransports
+                carrierInterface        = $diag.carrierInterface
+                carrierValidated        = $diag.carrierValidated
+                carrierUsePrivateDns    = $diag.carrierUsePrivateDns
+                carrierPrivateDnsServer = $diag.carrierPrivateDnsServer
+                carrierValidatedAddress = $diag.carrierValidatedAddress
+                privateDnsValidated     = $privateDnsValidated
+                wifiConnected           = $diag.wifiConnected
+                wifiNetId               = $diag.wifiNetId
+                wifiValidated           = $diag.wifiValidated
+                vpnNetId                = $diag.vpnNetId
+                vpnExtra                = $diag.vpnExtra
+                vpnUnderlying           = $diag.vpnUnderlying
+                dnsProbeResolved        = @($dnsProbes | ForEach-Object { $_.resolved })
+            }) | Out-Null
+
+        return $diag
     }
 
     $other = Get-KuiesOtherVpnNetwork -ConnectivityText (Get-KuiesConnectivityText -FileName 'connectivity-initial.txt')
@@ -828,39 +1025,51 @@ function Invoke-ScenarioNetworkSwitch {
     }
 
     try {
-        # Wi-Fi -> 行動網路
-        Invoke-KuiesShell 'svc wifi disable' -AllowFailure | Out-Null
-        $result = Invoke-KuiesSwitchStep -Label 'wifi-off'
-        $ok = Wait-KuiesCondition -TimeoutSeconds $TimeoutSeconds -Description '等候底層網路變成行動網路' -Condition {
-            $text = (Invoke-KuiesShell 'dumpsys connectivity --short').Text
-            $nets = Convert-KuiesConnectivityText -Text $text
-            $net = Resolve-KuiesUnderlyingNetwork -Networks $nets -DefaultNetId (Get-KuiesDefaultNetId -Text $text)
-            if ($net -and $net.transports -match 'CELLULAR') { return $net }
-            return $null
-        }
-        $observed = if ($ok) { $ok.transports } else { $result.observed }
-        Add-KuiesCheck -Name 'Wi-Fi 關閉後預設路徑改走行動網路' -Passed ([bool]$ok) -Expected '底層 transports 含 CELLULAR' -Actual $observed
-        foreach ($hostName in $DnsProbeHosts) {
-            $probe = Test-KuiesDnsResolution -HostName $hostName
-            Add-KuiesCheck -Name "[wifi-off] 系統 resolver 可解析 $($probe.host)" -Passed $probe.resolved -Expected '解析出 IP' -Actual $probe.address
+        if ($WithKuiesTunnel) {
+            $app = Get-KuiesAppInfo
+            Add-KuiesCheck -Name 'App 已安裝（要讓 tunnel 一起參與切換）' -Passed $app.installed -Expected "$AppId 已安裝" -Actual ($app.installed.ToString()) -Note "版本=$($app.versionName)"
+            if (-not $app.installed) { return }
+
+            Enable-KuiesNotificationPermission -PackageId $AppId | Out-Null
+            $slotFree = Stop-KuiesOtherVpn -PackageId $OtherVpnPackage
+            Add-KuiesCheck -Name 'VPN 位置已讓出給 KuiesBlock' -Passed $slotFree -Expected '沒有其他 active VPN' -Actual ''
+            if (-not $slotFree) { return }
+
+            $tunnel = Start-KuiesTunnel
+            $tunnelUp = [bool]$tunnel
+            $tunnelActual = '未出現'
+            if ($tunnel) { $tunnelActual = "netId=$($tunnel.netId) iface=$($tunnel.interfaceName)" }
+            Add-KuiesCheck -Name '切換前 KuiesBlock tunnel 已建立' -Passed $tunnelUp -Expected '出現 extra=VPN:tw.kuies.block 的網路' -Actual $tunnelActual
+            if (-not $tunnelUp) { return }
         }
 
-        # 行動網路 -> Wi-Fi
+        # 步驟 1：起始狀態（Wi-Fi）
+        Measure-KuiesSwitchStep -Label 'wifi-initial' -ExpectedTransport 'WIFI' | Out-Null
+
+        # 步驟 2：Wi-Fi -> 行動網路（已知正常，作為對照）
+        Invoke-KuiesShell 'svc wifi disable' -AllowFailure | Out-Null
+        Measure-KuiesSwitchStep -Label 'wifi-off' -ExpectedTransport 'CELLULAR' | Out-Null
+
+        # 步驟 3：行動網路 -> Wi-Fi（回報會壞掉的方向）
         Invoke-KuiesShell 'svc wifi enable' -AllowFailure | Out-Null
-        $okBack = Wait-KuiesCondition -TimeoutSeconds ([math]::Max($TimeoutSeconds, 60)) -Description '等候 Wi-Fi 回來並成為預設路徑' -Condition {
-            $text = (Invoke-KuiesShell 'dumpsys connectivity --short').Text
-            $nets = Convert-KuiesConnectivityText -Text $text
-            $net = Resolve-KuiesUnderlyingNetwork -Networks $nets -DefaultNetId (Get-KuiesDefaultNetId -Text $text)
-            if ($net -and $net.transports -match 'WIFI') { return $net }
-            return $null
-        }
-        $result2 = Invoke-KuiesSwitchStep -Label 'wifi-back'
-        Add-KuiesCheck -Name 'Wi-Fi 恢復後預設路徑回到 Wi-Fi' -Passed ([bool]$okBack) -Expected '底層 transports 含 WIFI' -Actual $(if ($okBack) { $okBack.transports } else { $result2.observed })
-        foreach ($hostName in $DnsProbeHosts) {
-            $probe = Test-KuiesDnsResolution -HostName $hostName
-            Add-KuiesCheck -Name "[wifi-back] 系統 resolver 可解析 $($probe.host)" -Passed $probe.resolved -Expected '解析出 IP' -Actual $probe.address
-        }
+        Measure-KuiesSwitchStep -Label 'wifi-back' -ExpectedTransport 'WIFI' -WaitSeconds ([math]::Max($TimeoutSeconds, 60)) | Out-Null
+
+        # 步驟 4：靜置後再量一次，分辨「一直沒回來」與「只是慢」
+        Start-Sleep -Seconds 20
+        Measure-KuiesSwitchStep -Label 'wifi-back-settled' -ExpectedTransport 'WIFI' -WaitSeconds 30 | Out-Null
     } finally {
+        if ($tunnelUp) {
+            Write-Host '== 停止 KuiesBlock tunnel ==' -ForegroundColor Cyan
+            $stopped = Stop-KuiesTunnel
+            Add-KuiesCheck -Name '已停止 KuiesBlock tunnel' -Passed $stopped -Expected 'tunnel 消失' -Actual "$stopped"
+        }
+        $restore = Restore-KuiesOtherVpn
+        if ($restore) {
+            foreach ($item in $restore) {
+                Add-KuiesCheck -Name "已還原其他 VPN：$($item.package)" -Passed $item.restored -Expected 'VPN 網路重新出現' -Actual $(if ($item.restored) { '已恢復' } else { '未自動恢復，需要你手動重新開啟該 App 的防護' })
+            }
+        }
+        Restore-KuiesNotificationPermission -PackageId $AppId
         Write-Host '== 還原無線設定 ==' -ForegroundColor Cyan
         if ($originalWifi) {
             Invoke-KuiesShell 'svc wifi enable' -AllowFailure | Out-Null

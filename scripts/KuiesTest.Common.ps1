@@ -15,6 +15,8 @@ $script:KuiesRunDir = $null
 $script:KuiesChecks = New-Object System.Collections.ArrayList
 $script:KuiesAppId = 'tw.kuies.block'
 $script:KuiesTagFilter = 'Kuies|DnsDiagnostics|AndroidRuntime|ActivityManager'
+# 只有在診斷網路行為時才額外抓取的系統 tag（只留在本機，不上傳）。
+$script:KuiesSystemTagFilter = 'ConnectivityService|DnsManager|NetworkMonitor|Vpn|WifiClientModeImpl|WifiServiceImpl|WifiConfigManager'
 
 function Initialize-KuiesTest {
     param([string]$AdbPath, [string]$Serial)
@@ -256,7 +258,9 @@ function Convert-KuiesConnectivityText {
         if ($line -match 'ni\{[^}]*extra:\s*([^}]*)\}') { $entry.extra = $Matches[1].Trim() }
         if ($line -match 'InterfaceName:\s*(\S+)') { $entry.interfaceName = $Matches[1] }
         if ($line -match 'Transports:\s*([A-Z|]+)') { $entry.transports = $Matches[1] }
-        if ($line -match 'Capabilities:\s*([A-Z&|]+)') { $entry.capabilities = $Matches[1] }
+        # capability 名稱含底線（例如 NOT_METERED&INTERNET&VALIDATED），字元類別必須含底線，
+        # 否則會截斷成 "NOT"，把有 INTERNET 的網路誤判成沒有。
+        if ($line -match 'Capabilities:\s*([A-Z0-9_&|]+)') { $entry.capabilities = $Matches[1] }
         if ($line -match 'DnsAddresses:\s*\[\s*([^\]]*)\]') { $entry.dnsAddresses = $Matches[1].Trim() }
         if ($line -match 'UsePrivateDns:\s*(true|false)') { $entry.usePrivateDns = ($Matches[1] -eq 'true') }
         if ($line -match 'PrivateDnsServerName:\s*(\S+)') { $entry.privateDnsServer = $Matches[1] }
@@ -304,12 +308,24 @@ function Get-KuiesAppInfo {
 }
 
 function Save-KuiesLogcat {
-    param([switch]$Full, [string]$FileName = 'logcat.txt', [string]$Directory)
+    param(
+        [switch]$Full,
+        [switch]$SystemNetworkTags,
+        [string]$FileName = 'logcat.txt',
+        [string]$Directory
+    )
 
     if ($Full) {
-        $command = 'logcat -d -v threadtime'
+        $command = 'logcat -d -v threadtime -b main -b system'
     } else {
-        $command = "logcat -d -v threadtime -e '$($script:KuiesTagFilter)'"
+        $filter = $script:KuiesTagFilter
+        # 系統網路 tag 記在 system buffer，只讀 main 會什麼都抓不到。
+        $buffers = '-b main'
+        if ($SystemNetworkTags) {
+            $filter = "$filter|$($script:KuiesSystemTagFilter)"
+            $buffers = '-b main -b system'
+        }
+        $command = "logcat -d -v threadtime $buffers -e '$filter'"
     }
     $result = Invoke-KuiesShell $command -AllowFailure
     Save-KuiesText -Name $FileName -Content $result.Text -Directory $Directory | Out-Null
