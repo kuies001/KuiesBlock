@@ -10,6 +10,9 @@
         <receiver
             android:name="tw.kuies.block.debug.DebugDnsExperimentReceiver"
             android:exported="true" />
+        <receiver
+            android:name="tw.kuies.block.debug.DebugFilterReceiver"
+            android:exported="true" />
     </application>
 
 </manifest>

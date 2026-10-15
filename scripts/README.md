@@ -23,6 +23,18 @@ rem 第四階段：Wi-Fi ↔ 行動網路（必須是 USB 連線）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\device-test.ps1 -Scenario network-switch -AllowDeviceChanges
 ```
 
+本機過濾規則是否真的生效（需要 debug APK，因為要透過 debug receiver 灌入已知規則）：
+
+```cmd
+rem 只驗證「本機規則確實擋下查詢、未命中的仍走上游、清空規則後恢復解析」
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\device-test.ps1 -Scenario filter -AllowDeviceChanges -StopOtherVpn
+```
+
+`filter` 情境為何不能用 `ping`：`adb shell` 的名稱解析**不經過 App 的 VPN**，而上游若有封鎖也會回
+NXDOMAIN，所以只比對 rcode 無法證明是「本機」擋下來的。本情境改由 App 自己對虛擬 DNS
+位址送出真正的 UDP 查詢，並同時比對 `rcode`、answer 數與**本機封鎖計數**：
+只有計數增加、且清空規則後同一名稱恢復解析，才算證明。
+
 建置與安裝 APK（本機 `java`/`gradle` 不在 PATH，需先指定 JBR）：
 
 ```cmd
@@ -34,7 +46,7 @@ adb -s <USB 序號> install -r app\build\outputs\apk\debug\app-debug.apk
 
 | 參數 | 說明 |
 | --- | --- |
-| `-Scenario` | `baseline`（唯讀）、`private-dns`、`protection`、`dns-declaration`、`network-switch` |
+| `-Scenario` | `baseline`（唯讀）、`private-dns`、`protection`、`dns-declaration`、`network-switch`、`filter` |
 | `-Serial` | 指定裝置序號；未指定時若同時有 USB 與無線偵錯會自動選 USB |
 | `-AllowDeviceChanges` | 允許會改變裝置狀態的步驟。沒有這個開關，腳本只讀不寫 |
 | `-StopOtherVpn` | 測試前停用佔用 VPN 位置的其他 App（預設 `com.adguard.android`），結束後嘗試還原 |

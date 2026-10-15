@@ -67,6 +67,7 @@ import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.doh.toProtectionError
 import tw.kuies.block.filter.FilterSnapshotHolder
+import tw.kuies.block.filter.LocalFilterStats
 
 /**
  * The DNS-only local VPN.
@@ -677,6 +678,7 @@ class KuiesVpnService : VpnService() {
         // came through the tunnel — the one situation in which local filtering can be in effect.
         val localReply = localBlockReply(query)
         if (localReply != null) {
+            LocalFilterStats.recordBlock()
             writeBack(query, localReply)
             return
         }

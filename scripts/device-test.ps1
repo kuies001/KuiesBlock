@@ -22,7 +22,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('baseline', 'private-dns', 'protection', 'dns-declaration', 'network-switch')]
+    [ValidateSet('baseline', 'private-dns', 'protection', 'dns-declaration', 'network-switch', 'filter')]
     [string]$Scenario,
 
     [string]$Serial,
@@ -1110,6 +1110,129 @@ function Invoke-ScenarioNetworkSwitch {
     Save-KuiesText -Name 'network-steps.json' -Content ($steps | ConvertTo-Json -Depth 4) | Out-Null
 }
 
+function Get-KuiesFilterProbeResult {
+    # 解析 App 自己發出的查詢結果：probe domain=<d> rcode=<r> answers=<n> ... locallyBlocked=<c>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$LogText, [Parameter(Mandatory)][string]$Domain)
+
+    $pattern = 'probe domain=' + [regex]::Escape($Domain) + '\s+rcode=(\S+)\s+answers=(\S+)[^\r\n]*locallyBlocked=(\d+)'
+    $match = [regex]::Match($LogText, $pattern)
+    if (-not $match.Success) { return $null }
+    return [pscustomobject]@{
+        rcode          = $match.Groups[1].Value
+        answers        = $match.Groups[2].Value
+        locallyBlocked = [int]$match.Groups[3].Value
+    }
+}
+
+function Invoke-KuiesFilterProbe {
+    param([Parameter(Mandatory)][string]$Domain, [int]$TimeoutSeconds = 20)
+
+    # 先清 logcat：同一個網域會 probe 多次（規則前／規則後），不清的話會讀到上一次的舊結果。
+    Clear-KuiesLogcat
+    Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.PROBE_DNS --es domain $Domain" -AllowFailure | Out-Null
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $text = Save-KuiesLogcat -FileName "logcat-filter-probe-$Domain.txt"
+        $result = Get-KuiesFilterProbeResult -LogText $text -Domain $Domain
+        if ($result) { return $result }
+    }
+    return $null
+}
+
+function Invoke-ScenarioFilter {
+    # 本機規則是否真的生效，必須由 App 自己送出的查詢來證明：
+    #  * `adb shell` 的解析不經過 App 的 VPN，ping 不能拿來當證據；
+    #  * 上游 AdGuard Home 對它自己封鎖的名稱也會回 NXDOMAIN，所以 rcode 單獨不足以證明是本機擋的。
+    # 因此本情境用 debug receiver 灌入已知規則，再由 App 對虛擬 DNS 送出真查詢，比對
+    # rcode / answer 數 / 本機封鎖計數三者。
+    Assert-KuiesDeviceChangesAllowed -Reason '本情境會啟動與停止 App 的 VPN'
+
+    $app = Get-KuiesAppInfo
+    Add-KuiesCheck -Name 'App 已安裝（debug APK，含測試用 receiver）' -Passed $app.installed -Expected "$AppId 已安裝" -Actual ($app.installed.ToString()) -Note "版本=$($app.versionName)"
+    if (-not $app.installed) { return }
+
+    $blockedHost = 'example.com'
+    $controlHost = 'dns.kuies.tw'
+
+    $before = Save-KuiesStateBundle -Label 'before'
+    $strict = $before.settings.'global:private_dns_mode' -eq 'hostname'
+    Add-KuiesNote "私人 DNS=$($before.settings.'global:private_dns_mode')（strict=$strict）；本機過濾只在非 strict 模式下可能生效。"
+
+    $other = Get-KuiesOtherVpnNetwork -ConnectivityText $before.connectivity
+    $slotFree = Stop-KuiesOtherVpn -PackageId $OtherVpnPackage
+    Add-KuiesCheck -Name 'VPN 位置未被其他 App 佔用' -Passed $slotFree -Expected '沒有其他 active VPN' -Actual $(if ($other) { $other.extra } else { 'none' })
+    if (-not $slotFree) { return }
+
+    $permissionGranted = $false
+    $tunnelUp = $false
+    try {
+        Enable-KuiesNotificationPermission -PackageId $AppId | Out-Null
+        $permissionGranted = $true
+        Invoke-KuiesShell "am start -n $AppId/.MainActivity" -AllowFailure | Out-Null
+        Clear-KuiesLogcat
+        $tunnel = Start-KuiesTunnel
+        $started = Save-KuiesStateBundle -Label 'started'
+        $tunnel = Get-KuiesTunnelNetwork -ConnectivityText $started.connectivity
+        $tunnelUp = ($null -ne $tunnel)
+        Add-KuiesCheck -Name 'KuiesBlock VPN 已建立' -Passed $tunnelUp -Expected 'connectivity 出現 extra=VPN:tw.kuies.block' -Actual $(if ($tunnel) { "netId=$($tunnel.netId)" } else { '未出現' })
+        if (-not $tunnelUp) { return }
+
+        # 灌入已知規則：example.com 由本機封鎖，dns.kuies.tw 不在規則內（上游照常解析）。
+        Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.SET_FILTER_RULES --es domains $blockedHost" -AllowFailure | Out-Null
+        Start-Sleep -Milliseconds 500
+        Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.RESET_FILTER_COUNTER" -AllowFailure | Out-Null
+        Start-Sleep -Milliseconds 300
+
+        # E2 契約：strict 私人 DNS 模式下 tunnel 不宣告 DNS（其餘模式才宣告攔截用的虛擬 DNS）。
+        # 注意：strict 模式下 /32 路由仍然存在，所以「明確送往 10.111.222.2」的封包還是會進隧道；
+        # 系統 resolver 不會用它，因此系統層級的攔截並未生效（見下方說明與 UI 狀態）。
+        if ($strict) {
+            Add-KuiesCheck -Name 'strict 模式：tunnel 不宣告 DNS（E2 契約）' -Passed (-not [bool]$tunnel.dnsAddresses) -Expected 'DnsAddresses 為空' -Actual "dns='$($tunnel.dnsAddresses)'"
+            Add-KuiesNote 'strict 模式下系統 resolver 不使用虛擬 DNS，本機過濾對系統層級查詢不生效；下列 probe 送出的封包是「明確送往虛擬 DNS」，因此仍會進隧道並被本機規則回答。'
+        } else {
+            Add-KuiesCheck -Name '非 strict 模式：tunnel 宣告攔截用虛擬 DNS' -Passed ([bool]$tunnel.dnsAddresses) -Expected 'DnsAddresses 非空' -Actual "dns='$($tunnel.dnsAddresses)'"
+        }
+
+        $blockedProbe = Invoke-KuiesFilterProbe -Domain $blockedHost
+        Save-KuiesText -Name 'filter-probe-blocked.json' -Content ($blockedProbe | ConvertTo-Json -Depth 4) | Out-Null
+        $blockedOk = ($null -ne $blockedProbe) -and ($blockedProbe.rcode -eq 'NXDOMAIN') -and ($blockedProbe.answers -eq '0') -and ($blockedProbe.locallyBlocked -ge 1)
+        Add-KuiesCheck -Name '本機規則命中：查詢被本機擋下（NXDOMAIN 且本機計數增加）' -Passed $blockedOk -Expected 'rcode=NXDOMAIN answers=0 locallyBlocked>=1' -Actual $(if ($blockedProbe) { "rcode=$($blockedProbe.rcode) answers=$($blockedProbe.answers) locallyBlocked=$($blockedProbe.locallyBlocked)" } else { '沒有回應' }) -Note 'NXDOMAIN 本身不足以證明是本機擋的（上游也會回 NXDOMAIN）；本機封鎖計數才是證據。'
+        if (-not $blockedOk) { return }
+
+        # 未命中的名稱仍必須走原本的 DoH 路徑（有答案），且不受本機規則影響。
+        $controlProbe = Invoke-KuiesFilterProbe -Domain $controlHost
+        Save-KuiesText -Name 'filter-probe-control.json' -Content ($controlProbe | ConvertTo-Json -Depth 4) | Out-Null
+        $controlOk = ($null -ne $controlProbe) -and ($controlProbe.rcode -eq 'NOERROR') -and ([int]$controlProbe.answers -ge 1)
+        Add-KuiesCheck -Name '未命中的名稱仍由上游 DoH 正常解析' -Passed $controlOk -Expected 'rcode=NOERROR 且 answers>=1' -Actual $(if ($controlProbe) { "rcode=$($controlProbe.rcode) answers=$($controlProbe.answers) locallyBlocked=$($controlProbe.locallyBlocked)" } else { '沒有回應' })
+
+        if ($blockedProbe -and $controlProbe) {
+            Add-KuiesCheck -Name '未命中的查詢沒有被本機規則攔下（計數未增加）' -Passed ($controlProbe.locallyBlocked -eq $blockedProbe.locallyBlocked) -Expected "locallyBlocked=$($blockedProbe.locallyBlocked)" -Actual "locallyBlocked=$($controlProbe.locallyBlocked)"
+        }
+
+        # 清掉規則後同一個名稱必須恢復正常解析：證明先前的 NXDOMAIN 來自本機規則。
+        Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.CLEAR_FILTER_RULES" -AllowFailure | Out-Null
+        Start-Sleep -Milliseconds 500
+        $clearedProbe = Invoke-KuiesFilterProbe -Domain $blockedHost
+        Save-KuiesText -Name 'filter-probe-cleared.json' -Content ($clearedProbe | ConvertTo-Json -Depth 4) | Out-Null
+        $clearedOk = ($null -ne $clearedProbe) -and ($clearedProbe.rcode -eq 'NOERROR') -and ([int]$clearedProbe.answers -ge 1)
+        Add-KuiesCheck -Name '清空規則後同一名稱恢復解析（證明剛剛是本機規則擋下的）' -Passed $clearedOk -Expected 'rcode=NOERROR 且 answers>=1' -Actual $(if ($clearedProbe) { "rcode=$($clearedProbe.rcode) answers=$($clearedProbe.answers)" } else { '沒有回應' })
+
+        $probeLog = Save-KuiesLogcat -Full:$FullLogcat -FileName 'logcat-filter.txt'
+    } finally {
+        Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.CLEAR_FILTER_RULES" -AllowFailure | Out-Null
+        if ($tunnelUp) { Stop-KuiesTunnel | Out-Null }
+        $restore = Restore-KuiesOtherVpn
+        if ($restore) {
+            foreach ($item in $restore) {
+                Add-KuiesCheck -Name "已還原其他 VPN：$($item.package)" -Passed $item.restored -Expected 'VPN 網路重新出現' -Actual $(if ($item.restored) { '已恢復' } else { '未自動恢復，需要你手動重新開啟該 App 的防護' })
+            }
+        }
+        if ($permissionGranted) { Restore-KuiesNotificationPermission -PackageId $AppId }
+        Save-KuiesStateBundle -Label 'after-restore' -SkipLogcat | Out-Null
+    }
+}
+
 # ---------------------------------------------------------------- 主流程
 
 try {
@@ -1136,6 +1259,7 @@ try {
         'protection' { Invoke-ScenarioProtection }
         'dns-declaration' { Invoke-ScenarioDnsDeclaration }
         'network-switch' { Invoke-ScenarioNetworkSwitch }
+        'filter' { Invoke-ScenarioFilter }
     }
 
     $note = ($script:KuiesNotes -join ' / ')

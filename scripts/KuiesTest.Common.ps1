@@ -16,7 +16,7 @@ $script:KuiesChecks = New-Object System.Collections.ArrayList
 $script:KuiesAppId = 'tw.kuies.block'
 # 實測：此裝置的 `logcat -e` 只比對「訊息內容」、不比對 tag，所以 tag 過濾一定要用 -s（tag 清單），
 # 否則 App 自己的 log（訊息裡不含這些關鍵字）永遠不會被收進 artifacts。
-$script:KuiesAppLogTags = 'KuiesVpnService,KuiesBlockApp,KuiesDnsExperiment,DnsDiagnostics'
+$script:KuiesAppLogTags = 'KuiesVpnService,KuiesBlockApp,KuiesDnsExperiment,KuiesFilterProbe,DnsDiagnostics'
 # 只有在診斷網路行為時才額外抓取的系統 tag（只留在本機，不上傳）。
 $script:KuiesSystemLogTags = 'ConnectivityService,DnsManager,NetworkMonitor,Vpn,WifiClientModeImpl,WifiServiceImpl,WifiConfigManager'
 
