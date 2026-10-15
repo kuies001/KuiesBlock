@@ -3,4 +3,5 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="kuies_block_settings.xml" />
     <exclude domain="sharedpref" path="kuies_block_dns.xml" />
+    <exclude domain="sharedpref" path="kuies_block_filter.xml" />
 </full-backup-content>
