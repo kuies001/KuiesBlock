@@ -102,8 +102,15 @@ data class FilterSubscription(
     val lastSuccessAtMillis: Long? = null,
     val lastError: String? = null
 ) {
-    /** True when this subscription's rules are part of the current snapshot. */
-    val contributesRules: Boolean get() = enabled && state == SubscriptionState.READY && ruleCount > 0
+    /**
+     * True when this source is enabled, has stored rules, and its last update succeeded.
+     *
+     * This is the flag for an "up to date" label. It is deliberately **not** the test for whether the
+     * rules are in use: a failed update keeps the previously stored rules protecting the user, so the
+     * snapshot is built from `FilterSettings.contributesToSnapshot`, which also accepts a source whose
+     * last update failed while its stored rules remain.
+     */
+    val isUpToDate: Boolean get() = enabled && state == SubscriptionState.READY && ruleCount > 0
 
     /** The built-in subscription that carries [profile]'s main list. */
     companion object {

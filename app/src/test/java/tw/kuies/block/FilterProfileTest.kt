@@ -83,17 +83,17 @@ class FilterProfileTest {
         assertEquals(SubscriptionOrigin.BUILT_IN, subscription.origin)
         assertTrue(subscription.enabled)
         assertEquals(SubscriptionState.NOT_READY, subscription.state)
-        assertFalse("nothing downloaded yet", subscription.contributesRules)
+        assertFalse("nothing downloaded yet", subscription.isUpToDate)
     }
 
     @Test
-    fun aSubscriptionOnlyContributesWhenEnabledReadyAndNonEmpty() {
+    fun aSubscriptionIsUpToDateOnlyWhenEnabledReadyAndNonEmpty() {
         val ready = FilterSubscription.forProfile(FilterProfile.STANDARD)
             .copy(state = SubscriptionState.READY, ruleCount = 10)
-        assertTrue(ready.contributesRules)
-        assertFalse(ready.copy(enabled = false).contributesRules)
-        assertFalse(ready.copy(state = SubscriptionState.FAILED).contributesRules)
-        assertFalse(ready.copy(ruleCount = 0).contributesRules)
+        assertTrue(ready.isUpToDate)
+        assertFalse(ready.copy(enabled = false).isUpToDate)
+        assertFalse(ready.copy(state = SubscriptionState.FAILED).isUpToDate)
+        assertFalse(ready.copy(ruleCount = 0).isUpToDate)
     }
 
     @Test

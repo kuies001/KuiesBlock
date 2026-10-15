@@ -135,7 +135,7 @@ data class FilterSettings(
      * Already-downloaded rules stay in use after a failed update: a source in
      * [SubscriptionState.FAILED] that still has a stored rule count keeps contributing, because
      * dropping a working list would remove protection the user already has (the design's rule that a
-     * failed update keeps the previous snapshot). [FilterSubscription.contributesRules] is stricter —
+     * failed update keeps the previous snapshot). [FilterSubscription.isUpToDate] is stricter —
      * it also requires [SubscriptionState.READY] — and is the right check for an "up to date" label.
      * This predicate is the one the assembler uses.
      */
