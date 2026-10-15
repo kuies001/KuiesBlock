@@ -9,14 +9,20 @@ const val IP_PROTOCOL_UDP = 17
 /** The virtual DNS endpoint the tunnel intercepts: an address plus the port we answer on. */
 data class DnsInterceptTarget(val address: Int, val port: Int)
 
-/** A DNS query taken from the tunnel, with everything needed to build the reply. */
+/**
+ * A DNS query taken from the tunnel, with everything needed to build the reply.
+ *
+ * [domain] is the question name exactly as it arrived. Canonicalising it (case, trailing dot, IDN)
+ * belongs to whatever consumes it, so the packet layer stays a faithful decoder.
+ */
 class TunnelDnsQuery(
     val transactionId: Int,
     val clientAddress: Int,
     val clientPort: Int,
     val queryBytes: ByteArray,
     val queryLength: Int,
-    val ednsUdpPayloadSize: Int?
+    val ednsUdpPayloadSize: Int?,
+    val domain: String
 )
 
 sealed interface DnsTunnelOutcome {
@@ -62,7 +68,8 @@ object DnsTunnelPacketParser {
                     clientPort = udp.sourcePort,
                     queryBytes = payload,
                     queryLength = payload.size,
-                    ednsUdpPayloadSize = outcome.query.ednsUdpPayloadSize
+                    ednsUdpPayloadSize = outcome.query.ednsUdpPayloadSize,
+                    domain = outcome.query.question.name
                 )
             )
         }

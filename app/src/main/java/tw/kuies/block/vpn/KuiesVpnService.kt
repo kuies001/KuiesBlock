@@ -66,6 +66,7 @@ import tw.kuies.block.doh.OkHttpDohTransport
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.doh.toProtectionError
+import tw.kuies.block.filter.FilterSnapshotHolder
 
 /**
  * The DNS-only local VPN.
@@ -671,6 +672,14 @@ class KuiesVpnService : VpnService() {
     }
 
     private fun handleQuery(query: TunnelDnsQuery) {
+        // Local rules answer first, without contacting anyone. This runs on a worker thread, so a
+        // rule lookup never holds up the reader, and it is only ever reached by a query that actually
+        // came through the tunnel — the one situation in which local filtering can be in effect.
+        val localReply = localBlockReply(query)
+        if (localReply != null) {
+            writeBack(query, localReply)
+            return
+        }
         val currentTransport = transport
         if (currentTransport == null) {
             writeBack(query, servfail(query))
@@ -704,6 +713,23 @@ class KuiesVpnService : VpnService() {
 
     private fun servfail(query: TunnelDnsQuery): ByteArray =
         DnsMessageWriter.servfail(query.queryBytes, query.queryLength)
+
+    /**
+     * The reply the local rules produce for [query], or null to let it continue upstream.
+     *
+     * The snapshot is read per query — a volatile read of an immutable value — so an update that
+     * lands mid-flight simply applies to the next query with no restart and no lock on this path.
+     */
+    private fun localBlockReply(query: TunnelDnsQuery): ByteArray? {
+        val snapshot = FilterSnapshotHolder.snapshot()
+        if (snapshot.isEmpty) return null
+        val mtu = routePlan?.mtu ?: DEFAULT_MTU
+        val budget = DnsReplyPolicy.udpPayloadBudget(
+            query.ednsUdpPayloadSize,
+            DnsReplyPolicy.ipv4UdpBudget(mtu)
+        )
+        return LocalDnsFilterPolicy.blockReply(query, snapshot, budget)
+    }
 
     private fun writeBack(query: TunnelDnsQuery, dnsPayload: ByteArray) {
         val output = tunnelOutput ?: return
