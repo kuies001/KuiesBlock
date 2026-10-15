@@ -34,8 +34,8 @@ import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 
 /**
- * The whole home screen: the app name, the shield, the protection status and the one button that
- * turns protection on or off.
+ * The whole home screen: the app name, the shield, the protection status, the one button that
+ * turns protection on or off, and a short card of plain-language benefits.
  *
  * Kept deliberately free of network detail. It shows no host name, no endpoint, no transport and
  * no counters — that is internal, and a plain user only needs to know whether protection is on. A
@@ -71,6 +71,8 @@ fun HomeScreen(
             isServiceRunning = isServiceRunning,
             onToggleProtection = onToggleProtection
         )
+
+        BenefitsCard()
     }
 }
 
@@ -219,5 +221,84 @@ private fun ErrorExplanation(error: ProtectionError?) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
+    }
+}
+
+/**
+ * Why it is worth keeping protection on, under the status card.
+ *
+ * The copy stays modest on purpose: a DNS-level filter can cut down ad loading, but it cannot catch
+ * every ad an app serves itself, so the two lines describe a possible saving instead of promising a
+ * guaranteed one or naming an unmeasured percentage. Like the rest of the screen, no host name,
+ * endpoint, diagnostic or counter appears here, and nothing in this card can start or stop the VPN.
+ */
+@Composable
+private fun BenefitsCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.home_benefits_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            BenefitRow(
+                iconRes = R.drawable.ic_block,
+                title = stringResource(R.string.home_benefit_blocking_title),
+                body = stringResource(R.string.home_benefit_blocking_body)
+            )
+            BenefitRow(
+                iconRes = R.drawable.ic_check_circle,
+                title = stringResource(R.string.home_benefit_free_title),
+                body = stringResource(R.string.home_benefit_free_body)
+            )
+        }
+    }
+}
+
+/**
+ * One benefit: a small icon beside its title and a single line of explanation. The text column takes
+ * the remaining width, so a long line wraps instead of overflowing, and the icon keeps its size
+ * when the system font is enlarged.
+ */
+@Composable
+private fun BenefitRow(iconRes: Int, title: String, body: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            // Decorative: the title next to it carries the same meaning.
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(24.dp)
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

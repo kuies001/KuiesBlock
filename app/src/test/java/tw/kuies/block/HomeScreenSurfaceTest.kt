@@ -8,11 +8,11 @@ import org.junit.Test
 /**
  * Source-level guard for the v0.3.0 home screen.
  *
- * The home screen shows the protection status and nothing else: no DNS host, no DoH URL, no
- * transport, no counters, no Private-DNS wording. That contract is about which strings a Composable
- * can reach, and a plain JVM unit test cannot observe a Composable's output, so this test reads the
- * one file that draws the screen. It fails if any token that would surface DNS detail comes back, or
- * if the status wording stops being rendered.
+ * The home screen shows the protection status, the two benefit rows and nothing else: no DNS host,
+ * no DoH URL, no transport, no counters, no Private-DNS wording. That contract is about which
+ * strings a Composable can reach, and a plain JVM unit test cannot observe a Composable's output, so
+ * this test reads the one file that draws the screen. It fails if any token that would surface DNS
+ * detail comes back, or if the status wording stops being rendered.
  */
 class HomeScreenSurfaceTest {
 
@@ -75,6 +75,27 @@ class HomeScreenSurfaceTest {
         )
         required.forEach { token ->
             assertTrue("HomeScreen.kt should still render $token", source.contains(token))
+        }
+    }
+
+    /**
+     * The benefits block is drawn from its own strings and one icon per row, so a row cannot lose its
+     * title, its explanation or its icon without this failing.
+     */
+    @Test
+    fun theHomeScreenRendersBothBenefitRowsWithTheirOwnIcon() {
+        val source = homeScreenSource()
+        val required = listOf(
+            "R.string.home_benefits_title",
+            "R.string.home_benefit_blocking_title",
+            "R.string.home_benefit_blocking_body",
+            "R.string.home_benefit_free_title",
+            "R.string.home_benefit_free_body",
+            "R.drawable.ic_block",
+            "R.drawable.ic_check_circle"
+        )
+        required.forEach { token ->
+            assertTrue("HomeScreen.kt should render $token", source.contains(token))
         }
     }
 
