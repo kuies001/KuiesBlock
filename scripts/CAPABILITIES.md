@@ -18,6 +18,8 @@
 | logcat | `logcat -d -v threadtime -e '<tag 正則>'` | 預設只抓 App 相關 tag，保留隱私 |
 | 啟動 / 停止 App | `am start -n tw.kuies.block/.MainActivity`、`am force-stop` | |
 | 授予執行期權限 | `pm grant`（例如 `POST_NOTIFICATIONS`） | 未實測 |
+| 預先授予 VPN 授權（免同意對話框） | `appops set tw.kuies.block ACTIVATE_VPN allow` | **實測可行**（2026-10-15）：設定後 `VpnService.prepare()` 不再跳同意視窗，UI 自動化即可啟動隧道；`appops reset tw.kuies.block` 可還原 |
+| debug 專用本機規則灌入與查詢探測 | `am broadcast -n tw.kuies.block/.debug.DebugFilterReceiver -a tw.kuies.block.debug.SET_FILTER_RULES --es domains a.com,b.com`、`…CLEAR_FILTER_RULES`、`…PROBE_DNS --es domain a.com`、`…RESET_FILTER_COUNTER` | 僅 debug build。`PROBE_DNS` 由 **App 自己**對虛擬 DNS 送真正的 UDP 查詢（`adb shell` 的解析不經過 VPN），結果記在 logcat tag `KuiesFilterProbe` |
 | debug 專用 DNS 宣告切換 | `am broadcast -n tw.kuies.block/.debug.DebugDnsExperimentReceiver -a tw.kuies.block.debug.SET_DNS_EXPERIMENT --es mode baseline|e2|e1` | 僅 debug build、僅當前 process；未實測 |
 | 網路切換 | `svc wifi enable|disable`、`svc data enable|disable`、`cmd wifi set-wifi-enabled` | 尚未實測（第四階段） |
 
@@ -25,7 +27,7 @@
 
 | 項目 | 原因 |
 | --- | --- |
-| **VPN 授權同意** | `VpnService.prepare()` 的同意對話框無法用 adb 授予；每次重新安裝後第一次需要真人在手機上點一次。腳本不會代按。 |
+| **VPN 授權同意** | 同意**對話框**本身無法用 adb 按下，腳本不會代按。但 2026-10-15 實測：可用 `appops set tw.kuies.block ACTIVATE_VPN allow` **預先授權**，對話框就不會出現（`-StopOtherVpn` 之外的自動化前置步驟）。 |
 | **解除螢幕鎖** | `cmd lock_settings get-disabled` = false（有鎖定畫面）；若有 PIN／圖形，螢幕熄滅後無法無人解鎖。不得為了測試清除鎖定。 |
 | **還原 AdGuard 之類的第三方 VPN** | 停用可自動（`am force-stop`），但能否自動恢復取決於該 App；無法恢復時必須由使用者手動開啟。 |
 
