@@ -1,6 +1,6 @@
 # KuiesBlock 真機自動化能力清單與限制
 
-實測日期 2026-10-12，裝置 Samsung SM-F7660（Android 16 / SDK 36，`user` build，無 root）。
+實測日期 2026-10-12，受測機為 Samsung Android 裝置（Android 16 / SDK 36，`user` build，無 root）。
 「實測」= 這次真的跑過並留下證據；「未實測」= 指令存在但尚未執行過。
 
 ## 可以無人介入完成（已實測）

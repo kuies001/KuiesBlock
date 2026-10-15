@@ -1,6 +1,6 @@
 # KuiesBlock 真機測試腳本
 
-用 Windows 本機 `adb` 驅動 Samsung 測試機（SM-F7660 / Android 16）驗證 KuiesBlock 的 VPN 與
+用 Windows 本機 `adb` 驅動 Samsung Android 裝置（Android 16）驗證 KuiesBlock 的 VPN 與
 私人 DNS 行為。每個情境都遵守「**記錄起始狀態 → 執行操作 → 驗證實際狀態**」，並把證據留在
 `artifacts\run-<時間>-<情境>\`，方便後續比對，不必手動匯出。
 
