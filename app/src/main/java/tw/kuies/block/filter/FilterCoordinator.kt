@@ -25,6 +25,7 @@ class FilterCoordinator(
     private val store: FilterSettingsStore,
     private val updater: SubscriptionUpdater,
     private val assembler: FilterAssembler,
+    private val contentStore: SubscriptionContentStore,
     private val dispatcher: Executor
 ) {
 
@@ -129,14 +130,68 @@ class FilterCoordinator(
         }
     }
 
+    // ---- user-added custom sources ----------------------------------------------------------
+
+    /** Adds a custom source. It carries no rules until it has been downloaded. */
+    fun addSubscription(subscription: FilterSubscription, onResult: (FilterStatus) -> Unit = {}) =
+        mutateSettings(onResult) { it.withSubscription(subscription) }
+
     /**
-     * One update attempt for the active tier's list, with the result persisted.
+     * Removes a custom source **and** the list text it downloaded.
      *
-     * The bookkeeping the attempt produced is written back in every branch — a failure has to survive
-     * a restart too, so the screen can keep telling the user the list is stale.
+     * The stored file goes with the entry: leaving it behind would keep paying disk for rules nothing
+     * can reference again. Only this subscription's own file is touched, and never the built-in
+     * list's — its id is refused on purpose.
      */
+    fun removeSubscription(subscriptionId: String, onResult: (FilterStatus) -> Unit = {}) {
+        dispatcher.execute {
+            val current = runCatching { store.load() }.getOrNull() ?: return@execute
+            val updated = current.withoutSubscription(subscriptionId)
+            runCatching { store.save(updated) }
+            if (subscriptionId != FilterSubscription.PROFILE_SUBSCRIPTION_ID) {
+                runCatching { contentStore.delete(subscriptionId) }
+            }
+            onResult(FilterStatus.of(updated, assembler.assemble(updated)))
+        }
+    }
+
+    /**
+     * Enables or disables one source.
+     *
+     * A disabled source keeps its downloaded text but stops contributing, so its rules leave the very
+     * next snapshot — the switch is a real change, not a label on screen.
+     */
+    fun setSubscriptionEnabled(
+        subscription: FilterSubscription,
+        enabled: Boolean,
+        onResult: (FilterStatus) -> Unit = {}
+    ) = mutateSettings(onResult) { it.withSubscription(subscription.copy(enabled = enabled)) }
+
+    /** Downloads one source on request; a failure keeps the rules that source already stored. */
+    fun updateSubscription(subscription: FilterSubscription, onResult: (FilterStatus) -> Unit = {}) {
+        dispatcher.execute {
+            val settings = runCatching { store.load() }.getOrNull() ?: return@execute
+            val updated = download(subscription, settings)
+            onResult(FilterStatus.of(updated, assembler.assemble(updated)))
+        }
+    }
+
+    // ---- downloads --------------------------------------------------------------------------
+
+    /** The active tier's list, expressed as a download of a known subscription. */
     private fun downloadProfileList(settings: FilterSettings): FilterSettings {
         val subscription = settings.builtInSubscription ?: return settings
+        return download(subscription, settings)
+    }
+
+    /**
+     * One update attempt for [subscription], with the result persisted.
+     *
+     * The bookkeeping the attempt produced is written back in every branch — a failure has to survive
+     * a restart too, so the screen can keep telling the user the list is stale. The updater keeps the
+     * previously downloaded text when an attempt fails, so a failure never empties a good list.
+     */
+    private fun download(subscription: FilterSubscription, settings: FilterSettings): FilterSettings {
         val request = SubscriptionUpdateRequest(
             subscription = subscription,
             profile = settings.profile,
@@ -177,6 +232,7 @@ class FilterCoordinator(
                 store = FilterSettingsStore(appContext),
                 updater = updater,
                 assembler = FilterAssembler(FilterSnapshotHolder.repository, contentStore),
+                contentStore = contentStore,
                 dispatcher = dispatcher
             )
         }

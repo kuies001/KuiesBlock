@@ -16,10 +16,13 @@ import tw.kuies.block.filter.FilterSettings
 import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.ManualRule
+import tw.kuies.block.filter.MatchScope
 import tw.kuies.block.filter.SubscriptionContentStore
 import tw.kuies.block.filter.SubscriptionFailure
 import tw.kuies.block.filter.SubscriptionFetchRequest
 import tw.kuies.block.filter.SubscriptionFetchResult
+import tw.kuies.block.filter.SubscriptionOrigin
 import tw.kuies.block.filter.SubscriptionSource
 import tw.kuies.block.filter.SubscriptionState
 import tw.kuies.block.filter.SubscriptionUpdater
@@ -53,8 +56,107 @@ class FilterCoordinatorTest {
             dispatcher = sameThread
         ),
         assembler = FilterAssembler(repository, contentStore),
+        contentStore = contentStore,
         dispatcher = sameThread
     )
+
+    /** A user-added source, as `SubscriptionDraft` would hand one over. */
+    private val customSource = FilterSubscription(
+        id = "user.test",
+        displayName = "My list",
+        url = "https://lists.example.com/ads.txt",
+        origin = SubscriptionOrigin.USER,
+        state = SubscriptionState.NOT_READY
+    )
+
+    @Test
+    fun aManualBlockRuleReachesTheSnapshotWithoutDownloading() {
+        source.body = "||ads.example^\n"
+        val coordinator = coordinator()
+        coordinator.selectStrength(FilterProfile.STANDARD)
+        val downloads = source.requests.size
+
+        val seen = mutableListOf<FilterStatus>()
+        coordinator.addManualBlock(ManualRule("Tracker.Example", MatchScope.SUBDOMAIN)) { seen.add(it) }
+
+        assertEquals("a manual rule must never trigger a download", downloads, source.requests.size)
+        assertEquals(1, repository.snapshot().userRuleCount)
+        assertEquals(1, seen.last().manualRuleCount)
+    }
+
+    @Test
+    fun aManualRuleSurvivesARestartAndCanBeRemoved() {
+        val coordinator = coordinator()
+        coordinator.selectStrength(FilterProfile.STANDARD)
+        coordinator.addManualAllow(ManualRule("ads.example", MatchScope.EXACT))
+
+        // A second coordinator reads the persisted settings, as a restart would.
+        assertEquals(1, coordinator().publishCurrent().manualRuleCount)
+
+        coordinator.removeManualAllow("ADS.example")
+        assertEquals(0, repository.snapshot().userRuleCount)
+    }
+
+    @Test
+    fun aCustomSourceContributesNothingUntilItIsDownloaded() {
+        val coordinator = coordinator()
+        coordinator.selectStrength(FilterProfile.STANDARD)
+        val baseline = repository.snapshot().subscriptionRuleCount
+
+        coordinator.addSubscription(customSource)
+
+        assertEquals("an undownloaded source must add no rules", baseline, repository.snapshot().subscriptionRuleCount)
+        assertEquals(2, store.load().subscriptions.size)
+    }
+
+    @Test
+    fun updatingACustomSourcePublishesItsRulesAndDisablingRemovesThemAgain() {
+        source.body = "||builtin.example^\n"
+        val coordinator = coordinator()
+        coordinator.selectStrength(FilterProfile.STANDARD)
+        val baseline = repository.snapshot().subscriptionRuleCount
+        // The custom source downloads a *different* list: two sources contributing the same domain
+        // would collapse into one published rule, and the counts would then say nothing about the
+        // wiring under test.
+        source.body = "||custom.example^\n"
+
+        coordinator.addSubscription(customSource)
+        val seen = mutableListOf<FilterStatus>()
+        coordinator.updateSubscription(customSource) { seen.add(it) }
+
+        assertEquals(baseline + 1, repository.snapshot().subscriptionRuleCount)
+        assertEquals(baseline + 1, seen.last().effectiveRuleCount)
+
+        coordinator.setSubscriptionEnabled(store.load().subscriptions.last(), enabled = false)
+        assertEquals(
+            "disabling a source must drop its rules from the very next snapshot",
+            baseline,
+            repository.snapshot().subscriptionRuleCount
+        )
+    }
+
+    @Test
+    fun removingACustomSourceDeletesItsStoredListAndItsRules() {
+        source.body = "||builtin.example^\n"
+        val coordinator = coordinator()
+        coordinator.selectStrength(FilterProfile.STANDARD)
+        val baseline = repository.snapshot().subscriptionRuleCount
+        source.body = "||custom.example^\n"
+        coordinator.addSubscription(customSource)
+        coordinator.updateSubscription(customSource)
+        assertTrue("the download must be on disk first", contentStore.exists(customSource.id))
+        assertEquals(baseline + 1, repository.snapshot().subscriptionRuleCount)
+
+        coordinator.removeSubscription(customSource.id)
+
+        assertFalse("the stored list must go with the entry", contentStore.exists(customSource.id))
+        assertEquals(1, store.load().subscriptions.size)
+        assertEquals(
+            "its rules must leave the published snapshot too",
+            baseline,
+            repository.snapshot().subscriptionRuleCount
+        )
+    }
 
     @Test
     fun aFreshInstallPublishesNothingAndDownloadsNothing() {
