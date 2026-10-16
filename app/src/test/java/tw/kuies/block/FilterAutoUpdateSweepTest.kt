@@ -2,6 +2,7 @@ package tw.kuies.block
 
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -247,5 +248,54 @@ class FilterAutoUpdateSweepTest {
         assertEquals("\"etag-1\"", rebuilt.requests.single().etag)
         assertEquals(UpdateCheckOutcome.AllCurrent, summary!!.outcome)
         assertEquals("||ads.example^\n", content.read(builtInId()))
+    }
+
+    @Test
+    fun `a manual update during a sweep does not download the list a second time`() {
+        val prefs = prefsWithBuiltIn(ruleCount = 100)
+        val content = newContentStore()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        // Both calls run on the same dispatcher thread, so a plain counter is safe here and makes the
+        // two answers unambiguous: the sweep stores new content, the manual update finds it current.
+        var calls = 0
+        val source = ScriptedSource {
+            if (calls++ == 0) {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+                SubscriptionFetchResult.Success("||ads.example^\n", 15L, "\"etag-1\"")
+            } else {
+                SubscriptionFetchResult.NotModified
+            }
+        }
+        val dispatcher = Executors.newSingleThreadExecutor()
+        try {
+            // The same content store the assertions read from: leaving the parameter out here made the
+            // coordinator build its own directory, so `content.read` below saw an empty one.
+            val coordinator = coordinator(prefs, source, dispatcher, content)
+            val sweepFinished = CountDownLatch(1)
+            coordinator.refreshAll { sweepFinished.countDown() }
+            assertTrue("the sweep never entered the download", entered.await(5, TimeUnit.SECONDS))
+
+            // The user taps 立即更新 while the sweep is still inside the download. It is deliberately not
+            // refused — an explicit action always runs — it is serialised behind the sweep.
+            val manualFinished = CountDownLatch(1)
+            coordinator.refresh { manualFinished.countDown() }
+
+            release.countDown()
+            assertTrue("the sweep never finished", sweepFinished.await(5, TimeUnit.SECONDS))
+            assertTrue("the manual update never finished", manualFinished.await(5, TimeUnit.SECONDS))
+
+            assertEquals(2, source.requests.size)
+            // The essence of "no second download": the manual request is conditional on the ETag the
+            // sweep just stored, so the same list is not fetched again, and the rules that were already
+            // valid are still there afterwards.
+            assertNull(source.requests[0].etag)
+            assertEquals("\"etag-1\"", source.requests[1].etag)
+            assertEquals("||ads.example^\n", content.read(builtInId()))
+            assertEquals(1, FilterSettingsStore(prefs).load().builtInSubscription!!.ruleCount)
+        } finally {
+            dispatcher.shutdownNow()
+        }
     }
 }
