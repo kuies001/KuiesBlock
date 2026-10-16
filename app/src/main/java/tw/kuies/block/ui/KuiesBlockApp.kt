@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +28,7 @@ import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
 import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
+import tw.kuies.block.data.OnboardingGate
 import tw.kuies.block.dns.DnsConfigStore
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsDiagnostics
@@ -35,10 +37,12 @@ import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.filter.FilterCoordinatorHolder
 import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.vpn.KuiesVpnService
+import tw.kuies.block.vpn.OtherVpnProbe
 import tw.kuies.block.vpn.UnderlyingNetworkFinder
 import tw.kuies.block.vpn.VpnAuthorization
 import java.net.InetAddress
@@ -62,6 +66,30 @@ fun KuiesBlockApp(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var destination by remember { mutableStateOf(BlockDestination.HOME) }
+
+    // The first-run decision is made once, from what is already stored, and before this session
+    // writes anything of its own: `syncEnvironment()` records the platform's authorization answer on
+    // the first resume, so asking later would make every install look used. The guide is only for a
+    // genuinely new one — see [OnboardingGate.shouldShowAutomatically] for the four facts it needs.
+    val guideOnFirstRun = remember {
+        OnboardingGate.shouldShowAutomatically(
+            settings = settingsStore.load(),
+            filterSettingsStored = FilterSettingsStore(appContext).hasStoredSettings()
+        )
+    }
+    // Kept across a configuration change: rotating the phone in the middle of the guide must not
+    // drop the user on the home screen, which is also why the page and the replay flag are saved.
+    var guideVisible by rememberSaveable { mutableStateOf(guideOnFirstRun) }
+    var guidePage by rememberSaveable { mutableStateOf(OnboardingPage.VPN_PERMISSION) }
+    var guideReplay by rememberSaveable { mutableStateOf(false) }
+
+    // Whether the authorization is really held, refreshed by the same signal the rest of the screen
+    // uses (the authoritative `prepare()` check on every resume, plus the consent dialog's result).
+    var vpnAuthorized by remember { mutableStateOf(false) }
+
+    // Whether another app's VPN owns the system's default network. Shown as a plain notice only.
+    var anotherVpnActive by remember { mutableStateOf(false) }
+
     // Read once: with the transport picker gone there is nothing on screen that changes it. The
     // stored configuration still drives the tunnel and the diagnostic below.
     val dnsConfig = remember { dnsStore.load() }
@@ -97,32 +125,82 @@ fun KuiesBlockApp(
         onDispose { executor.shutdownNow() }
     }
 
+    /**
+     * Whether the consent dialog is being opened to start protection, or only to record the
+     * authorization.
+     *
+     * The guide's first page asks for the permission and nothing else — its second page is where
+     * protection is started — while the home switch and the guide's second page want the start. One
+     * launcher and one flow serve both, so this is the only thing that differs.
+     */
+    var consentStartsProtection by remember { mutableStateOf(true) }
+
+    /**
+     * Starts the tunnel through the app's one start path.
+     *
+     * Records that protection was started on this install, once and for all: that is the quietest and
+     * most reliable sign the install is not a new one, and it is what lets the first-run guide stay
+     * away after the user later revokes the VPN authorization.
+     */
+    fun startTunnel() {
+        settingsStore.setProtectionStarted()
+        ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
+        KuiesVpnService.start(appContext)
+    }
+
     val vpnConsentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val granted = result.resultCode == Activity.RESULT_OK
+        // Only an explicit OK is a grant: a refusal is recorded as not authorized and never starts
+        // anything, so the guide keeps asking and never shows a permission it does not hold.
+        val granted = VpnAuthorization.consentGranted(result.resultCode)
+        val alsoStart = consentStartsProtection
+        consentStartsProtection = true
+        vpnAuthorized = granted
         settingsStore.setVpnAuthorizationGranted(granted)
         ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRequest(granted))
-        if (granted) {
-            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
-            KuiesVpnService.start(appContext)
+        if (granted && alsoStart) {
+            startTunnel()
+        }
+        // Page 1 only wanted the permission: a grant it obtained moves the guide on.
+        if (granted && !alsoStart && guideVisible && guidePage == OnboardingPage.VPN_PERMISSION) {
+            guidePage = OnboardingPage.START_PROTECTION
         }
     }
 
     fun startRequested() {
         if (VpnAuthorization.isGranted(appContext)) {
-            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
-            KuiesVpnService.start(appContext)
+            vpnAuthorized = true
+            startTunnel()
             return
         }
         val consent = VpnAuthorization.consentIntent(appContext)
         if (consent == null) {
             settingsStore.setVpnAuthorizationGranted(true)
-            ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
-            KuiesVpnService.start(appContext)
+            vpnAuthorized = true
+            startTunnel()
         } else {
+            consentStartsProtection = true
             vpnConsentLauncher.launch(consent)
         }
+    }
+
+    /**
+     * The guide's first page: asks for the VPN authorization and records the answer, without starting
+     * protection. Reuses the same launcher and the same [VpnAuthorization] call as the home switch.
+     */
+    fun requestVpnAuthorizationOnly() {
+        val consent = VpnAuthorization.consentIntent(appContext)
+        if (consent == null) {
+            // Already granted between the two checks: record it and move on, ask nothing.
+            settingsStore.setVpnAuthorizationGranted(true)
+            vpnAuthorized = true
+            ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRequest(true))
+            guidePage = OnboardingPage.START_PROTECTION
+            return
+        }
+        consentStartsProtection = false
+        vpnConsentLauncher.launch(consent)
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -131,11 +209,14 @@ fun KuiesBlockApp(
 
     fun syncEnvironment() {
         val granted = VpnAuthorization.isGranted(appContext)
+        vpnAuthorized = granted
         settingsStore.setVpnAuthorizationGranted(granted)
         DnsStatsRepository.refresh()
         // Re-read on every resume: the strength section must never describe a Private DNS mode the
         // user has already changed in Android's settings and come back from.
         privateDnsMode = PrivateDnsSettings.read(appContext).mode
+        // Read-only probe for the guide's plain notice; it never stops or reconfigures that VPN.
+        anotherVpnActive = OtherVpnProbe.anotherVpnHoldsTheSlot(appContext, KuiesVpnService.isRunning)
         when {
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
             ProtectionStatusHolder.state == ProtectionState.NOT_AUTHORIZED ->
@@ -322,6 +403,55 @@ fun KuiesBlockApp(
     // `ProtectionStatusHolder.state` is Compose state, so this recomposes when the service reports.
     val protectionRunning = ProtectionStateRules.isInterceptionActive(protectionState)
 
+    fun leaveGuide(completed: Boolean) {
+        // Read before it is cleared: a replay returns to settings, a first run to the home screen.
+        val replay = guideReplay
+        // A replay records nothing: the install's own record must be left exactly as it was, so a
+        // guide opened again from settings can never make the automatic one come back.
+        OnboardingGate.stateToPersist(replay = replay, completed = completed)?.let {
+            settingsStore.setOnboardingState(it)
+        }
+        guideVisible = false
+        guideReplay = false
+        guidePage = OnboardingPage.VPN_PERMISSION
+        destination = if (replay) BlockDestination.SETTINGS else BlockDestination.HOME
+    }
+
+    fun onGuidePrimaryAction() {
+        when (guidePage) {
+            // Page 1 owns the permission only: it asks for it, or moves on when it is already held.
+            OnboardingPage.VPN_PERMISSION ->
+                if (vpnAuthorized) guidePage = OnboardingPage.START_PROTECTION else requestVpnAuthorizationOnly()
+
+            // Page 2 reports the real state, so its one button does whatever that state needs: finish
+            // once protection verifiably runs, wait while it starts, and otherwise hand the tap to the
+            // home switch's own handler. That is the same `startRequested()` the home screen uses,
+            // plus the app's existing retry/stop decision for a failure — no second state machine.
+            OnboardingPage.START_PROTECTION -> when {
+                ProtectionStateRules.isInterceptionActive(protectionState) -> leaveGuide(completed = true)
+                protectionState == ProtectionState.STARTING -> Unit
+                else -> onToggleProtection()
+            }
+        }
+    }
+
+    // The guide covers the app until it is finished or skipped, which is what "show it on first run"
+    // means; skipping it returns to the home screen with everything reachable.
+    if (guideVisible) {
+        OnboardingScreen(
+            page = guidePage,
+            vpnAuthorized = vpnAuthorized,
+            anotherVpnActive = anotherVpnActive,
+            protectionState = protectionState,
+            protectionError = protectionError,
+            isServiceRunning = KuiesVpnService.isRunning,
+            onPrimaryAction = { onGuidePrimaryAction() },
+            onSkip = { leaveGuide(completed = false) },
+            modifier = modifier
+        )
+        return
+    }
+
     // The home screen renders the running state and nothing about DNS: no status derivation, no
     // counters. `ProtectionStatusHolder.state` is what the service last reported, so a claim of
     // 「防護已啟用」 can only come from the tunnel that really came up and verified its DNS path.
@@ -356,6 +486,13 @@ fun KuiesBlockApp(
             onUpdateSubscription = { subscription -> updateSubscription(subscription) },
             onDeleteSubscription = { subscription -> deleteSubscription(subscription) },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
+            onReplayGuide = {
+                // A replay: the two pages are shown over settings, and leaving them records nothing
+                // and changes no stored value, so the guide can never come back by itself from here.
+                guidePage = OnboardingPage.VPN_PERMISSION
+                guideReplay = true
+                guideVisible = true
+            },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier
         )

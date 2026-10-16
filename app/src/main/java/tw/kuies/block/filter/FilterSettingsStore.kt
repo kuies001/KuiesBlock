@@ -53,6 +53,16 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
         )
     }
 
+    /**
+     * Whether this install has ever stored filter settings at all.
+     *
+     * Read-only, and the only caller is the first-run gate: a genuinely new install has never chosen
+     * a strength, added a source or written a rule, so the preference file is empty. It deliberately
+     * does **not** ask what the stored values are — a legacy 關閉 (`enabled=false`) is still stored
+     * settings, and such an install is an existing user, not a new one.
+     */
+    fun hasStoredSettings(): Boolean = prefs.all.isNotEmpty()
+
     fun save(settings: FilterSettings) {
         // A set has no order and no duplicate ids, so both are settled here: one record per id, and
         // the profile list always first.

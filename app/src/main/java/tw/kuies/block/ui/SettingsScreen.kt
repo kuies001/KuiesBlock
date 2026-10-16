@@ -65,6 +65,8 @@ fun SettingsScreen(
     onUpdateSubscription: (FilterSubscription) -> Unit,
     onDeleteSubscription: (FilterSubscription) -> Unit,
     onRunDnsDiagnostics: () -> Unit,
+    /** Shows the two-page first-run guide again. Records nothing and changes no setting. */
+    onReplayGuide: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -116,8 +118,33 @@ fun SettingsScreen(
             dnsChecking = dnsChecking,
             onRunDnsDiagnostics = onRunDnsDiagnostics
         )
+        GuideSection(onReplayGuide = onReplayGuide)
         PrivacySection()
         AboutSection(appVersion = appVersion)
+    }
+}
+
+/**
+ * The way back to the first-run guide.
+ *
+ * The guide is shown by itself exactly once, so this is how a user finds it again — and it is only
+ * that: the button replays the two pages and writes nothing, so it cannot clear the authorization,
+ * the strength, the downloaded lists or any rule.
+ */
+@Composable
+private fun GuideSection(onReplayGuide: () -> Unit) {
+    SectionCard(title = stringResource(R.string.settings_guide_section)) {
+        Text(
+            text = stringResource(R.string.settings_guide_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(
+            onClick = onReplayGuide,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.action_replay_guide))
+        }
     }
 }
 

@@ -35,6 +35,9 @@
 
     <string name="action_back">返回</string>
     <string name="settings_title">設定</string>
+    <string name="settings_guide_section">使用教學</string>
+    <string name="settings_guide_body">第一次使用的兩個步驟：授權 VPN、開啟防護。隨時可以再回來看一次，不會改變任何設定。</string>
+    <string name="action_replay_guide">重新觀看使用教學</string>
     <string name="settings_diagnostics_section">連線診斷</string>
     <string name="action_run_dns_diagnostics">執行 DNS 診斷</string>
     <string name="settings_diagnostic_result">診斷結果</string>
