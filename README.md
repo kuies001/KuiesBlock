@@ -2,6 +2,8 @@
 
 > 輕量攔截廣告，不再被打擾
 
+**[⬇ 下載最新版本 APK](https://github.com/kuies001/KuiesBlock/releases/latest)**
+
 KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的 `VpnService` 建立一個**只攔截 DNS** 的本機 VPN：
 查詢先由裝置上的本機規則判斷（可選寬鬆／標準／嚴格三級清單），未被攔截的查詢再以加密的
 **DNS over HTTPS（DoH）** 送往自架的 AdGuard Home，由伺服器端補上廣告與追蹤網域規則。
