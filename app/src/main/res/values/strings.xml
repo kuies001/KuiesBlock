@@ -8,7 +8,7 @@
     <string name="notification_starting_title">正在啟動 KuiesBlock 防護</string>
     <string name="notification_starting_text">正在建立本機 VPN 並確認 DNS 往返正常，尚未開始攔截。</string>
     <string name="notification_active_title">KuiesBlock 防護已啟用</string>
-    <string name="notification_active_text">系統 DNS 查詢正透過加密的 DoH 送往 dns.kuies.tw，一般流量不受影響。</string>
+    <string name="notification_active_text">未攔截的 DNS 查詢透過加密連線傳送至預設 DNS 解析服務，一般流量不受影響。</string>
     <string name="notification_stopped_title">KuiesBlock 防護已停止</string>
     <string name="notification_stopped_text">DNS 無法正常運作（%1$s），已停止防護並恢復正常網路。</string>
     <string name="action_stop_protection">停用防護</string>
@@ -19,7 +19,7 @@
     <string name="protection_error_tun">無法建立本機 VPN 介面</string>
     <string name="protection_error_network">找不到可用的網路</string>
     <string name="protection_error_endpoint">DNS 傳輸設定無效</string>
-    <string name="protection_error_unreachable">無法連線到 dns.kuies.tw</string>
+    <string name="protection_error_unreachable">無法連線至 DNS 解析服務</string>
     <string name="protection_error_timeout">DNS 查詢逾時</string>
     <string name="protection_error_tls">TLS 憑證驗證失敗</string>
     <string name="protection_error_response">DNS 回應格式錯誤</string>
