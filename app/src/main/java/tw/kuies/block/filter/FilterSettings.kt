@@ -16,14 +16,17 @@ package tw.kuies.block.filter
 data class FilterSettings(
     val profile: FilterProfile = FilterProfile.DEFAULT,
     /**
-     * Whether the local filter runs at all.
+     * Whether the local filter is *configured*, i.e. whether [FilterAssembler] may publish rules.
      *
-     * False until the user picks a strength, so a fresh install blocks nothing and downloads
-     * nothing — the filter can never start working behind the user's back. This is a different
-     * question from [contributesToSnapshot], which only answers "if the filter runs, does this
-     * source's stored content belong in the snapshot?".
+     * It is no longer a choice the user can reach: the 關閉 strength option is gone, so a stored
+     * `false` (what that option used to persist) is migrated to `true` by [FilterSettingsStore.load]
+     * and the home screen's protection switch is the single on/off. What keeps a fresh install from
+     * doing anything is that it has no downloaded list, not this flag. It stays as the assembler's
+     * publish gate, so a settings object that was explicitly turned off cannot leak rules into the
+     * snapshot. This is a different question from [contributesToSnapshot], which only answers "if the
+     * filter runs, does this source's stored content belong in the snapshot?".
      */
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val subscriptions: List<FilterSubscription> = listOf(
         FilterSubscription.forProfile(FilterProfile.DEFAULT)
     ),
@@ -50,8 +53,8 @@ data class FilterSettings(
      * copy on disk belongs to the previous list, so it is not marked ready and its ETag is dropped.
      * Custom subscriptions are unaffected — they are independent sources, not tiers.
      *
-     * Choosing a tier also switches the filter on: picking a strength is the user's act of turning
-     * it on.
+     * Choosing a tier only picks the list; it never starts protection, which the home screen's switch
+     * owns. [enabled] is left set, so the filter stays configured.
      */
     fun withProfile(profile: FilterProfile): FilterSettings = copy(
         profile = profile,
@@ -61,10 +64,12 @@ data class FilterSettings(
     )
 
     /**
-     * Turns the local filter on or off without touching the tier or the stored content.
+     * The assembler's publish gate, kept as the safety net it always was: `false` publishes no rules
+     * while keeping the tier and the stored content.
      *
-     * Switching it off publishes no rules; the downloaded lists stay on disk, so switching back on
-     * applies them again without another download.
+     * No screen can produce that state any more — the 關閉 strength option is gone and everything the
+     * store loads is configured — but [FilterAssembler] still consults it, so a settings object that
+     * was explicitly turned off cannot leak rules into the snapshot.
      */
     fun withEnabled(enabled: Boolean): FilterSettings = copy(enabled = enabled)
 
@@ -185,14 +190,14 @@ data class FilterSettings(
         rules.distinctBy { (DomainName.normalise(it.domain) ?: it.domain.trim().lowercase()) to it.scope }
 
     companion object {
-        /** Profile STANDARD, filter **off**, no manual rules, one built-in subscription, nothing downloaded. */
+        /** Profile STANDARD, filter **configured**, no manual rules, one built-in subscription, nothing downloaded. */
         val DEFAULTS = FilterSettings()
 
         /**
-         * A specific tier, switched on.
+         * A specific tier, with the filter configured.
          *
          * Always use this (or [withProfile]) rather than `FilterSettings(profile = …)`, which would
-         * keep the default tier's main list and leave the filter off.
+         * keep the default tier's main list instead of the requested one.
          */
         fun forProfile(profile: FilterProfile): FilterSettings = FilterSettings(
             profile = profile,

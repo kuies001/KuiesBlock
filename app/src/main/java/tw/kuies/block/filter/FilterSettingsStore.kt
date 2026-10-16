@@ -40,7 +40,12 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         return FilterSettings(
             profile = profile,
-            enabled = guarded(false) { prefs.getBoolean(KEY_ENABLED, false) },
+            // Always configured, never read back as a gate. A stored `false` is the 關閉 choice of an
+            // older build, and that choice no longer exists: it migrates to "configured" and is never
+            // honoured again, so an upgraded install neither loses its downloaded list nor silently
+            // ends up with filtering off. Loading it must never start anything either — the VPN is
+            // started only by the home screen's switch, so this is a stored value, not an action.
+            enabled = true,
             subscriptions = subscriptions.map { it.subscription },
             manualAllow = guarded(emptyList()) { readManualRules(KEY_MANUAL_ALLOW) },
             manualBlock = guarded(emptyList()) { readManualRules(KEY_MANUAL_BLOCK) },
@@ -60,6 +65,7 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         prefs.edit()
             .putString(KEY_PROFILE, settings.profile.id)
+            // Written for an older build's benefit; loading never gates on it any more.
             .putBoolean(KEY_ENABLED, settings.enabled)
             .putStringSet(KEY_SUBSCRIPTIONS, records)
             .putStringSet(KEY_MANUAL_ALLOW, encodeManualRules(settings.manualAllow))

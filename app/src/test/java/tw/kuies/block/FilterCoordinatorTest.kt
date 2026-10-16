@@ -28,8 +28,9 @@ import tw.kuies.block.filter.SubscriptionState
 import tw.kuies.block.filter.SubscriptionUpdater
 
 /**
- * The wiring that makes the local filter actually take effect: nothing at all until the user chooses
- * a strength, one download when they do, and the stored list kept afterwards.
+ * The wiring that makes the local filter actually take effect: no rule published and nothing
+ * downloaded until the user chooses a strength, one download when they do, and the stored list kept
+ * afterwards.
  */
 class FilterCoordinatorTest {
 
@@ -162,9 +163,40 @@ class FilterCoordinatorTest {
     fun aFreshInstallPublishesNothingAndDownloadsNothing() {
         val status = coordinator().publishCurrent()
 
-        assertFalse(status.enabled)
+        // "Configured" is no longer an on/off: there is no 關閉 choice to store, so a fresh install
+        // reads as configured while having nothing to apply. What it must not do is fetch or publish
+        // anything — that is what the two assertions below pin down.
+        assertTrue(status.enabled)
         assertTrue("no rules may be published before the user chooses", repository.snapshot().isEmpty)
         assertTrue("nothing may be downloaded before the user chooses", source.requests.isEmpty())
+    }
+
+    /**
+     * The migration decided when the 關閉 option was removed (2026-10-16, option A): an install that
+     * had stored `enabled=false` keeps its tier and its downloaded list, and reads as configured — but
+     * nothing here starts protection. Only the home switch starts the tunnel (`KuiesVpnService` is
+     * started from the UI and nowhere else), so publishing is the most this path may do.
+     */
+    @Test
+    fun aLegacyStoredOffInstallIsConfiguredWithoutDownloadingOrStartingAnything() {
+        contentStore.write(FilterSubscription.PROFILE_SUBSCRIPTION_ID, "||ads.example^\n")
+        store.save(
+            FilterSettings.forProfile(FilterProfile.STANDARD)
+                .withEnabled(false)
+                .withSubscription(
+                    FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
+                        state = SubscriptionState.READY,
+                        ruleCount = 1
+                    )
+                )
+        )
+
+        val status = coordinator().publishCurrent()
+
+        assertEquals("the chosen tier survives the upgrade", FilterProfile.STANDARD, status.profile)
+        assertTrue("a legacy 關閉 migrates to configured", status.enabled)
+        assertEquals("the stored list stays applied, ready for the switch", 1, status.effectiveRuleCount)
+        assertTrue("the migration must not download anything on its own", source.requests.isEmpty())
     }
 
     @Test
@@ -196,22 +228,33 @@ class FilterCoordinatorTest {
         assertEquals(1, source.requests.size)
     }
 
+    /**
+     * Turning protection off and on again is the home switch's business and never touches these
+     * settings: it stops and starts the tunnel, and nothing in the filter path is keyed on that. So
+     * the tier the user chose, and the list already downloaded for it, must still be there afterwards
+     * — with no second download.
+     */
     @Test
-    fun switchingOffStopsPublishingAndKeepsTheStoredList() {
+    fun theChosenStrengthSurvivesProtectionBeingSwitchedOffAndOnAgain() {
         source.body = "||ads.example^\n"
-        val coordinator = coordinator()
-        coordinator.selectStrength(FilterProfile.STANDARD)
+        coordinator().selectStrength(FilterProfile.STRICT)
 
-        val seen = mutableListOf<FilterStatus>()
-        coordinator.selectStrength(null, onStatus = { seen.add(it) })
+        // A second coordinator reading the store is what the app does after the switch went off and
+        // on again: nothing about the protection state is stored here.
+        val status = coordinator().publishCurrent()
 
-        assertFalse(seen.last().enabled)
-        assertTrue("switching off must publish no rules", repository.snapshot().isEmpty)
+        assertEquals("the chosen tier must not change", FilterProfile.STRICT, status.profile)
+        assertTrue("the filter stays configured; the home switch owns protection", status.enabled)
+        assertEquals(
+            "the stored list must be applied again without a download",
+            1,
+            status.effectiveRuleCount
+        )
         assertTrue(
-            "the downloaded list stays on disk so switching back on needs no download",
+            "the downloaded list stays on disk",
             contentStore.exists(FilterSubscription.PROFILE_SUBSCRIPTION_ID)
         )
-        assertFalse(store.load().enabled)
+        assertEquals("switching protection off and on must not download again", 1, source.requests.size)
     }
 
     @Test

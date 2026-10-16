@@ -1,6 +1,8 @@
 package tw.kuies.block
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kuies.block.dns.PrivateDnsMode
@@ -16,31 +18,59 @@ import tw.kuies.block.ui.FilterPresentation
 /**
  * What the settings screen may tell the user about the interception strength.
  *
- * The important property is the negative one: nothing may read as "in effect" while the platform's
- * Private DNS owns name resolution, and an untouched install must read as off rather than as
- * protection.
+ * The important property is the negative one: nothing may read as "in effect" while protection is not
+ * running or while the platform's Private DNS owns name resolution, and an untouched install must read
+ * as "protection not started" rather than as protection.
  */
 class FilterPresentationTest {
 
     @Test
-    fun anUntouchedInstallReadsAsOffRatherThanAsProtection() {
+    fun aFreshInstallWithProtectionOffNeverReadsAsProtection() {
         val status = FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY)
 
-        assertEquals("未啟用", FilterPresentation.stateLabel(status, PrivateDnsMode.OFF))
+        val label = FilterPresentation.stateLabel(status, PrivateDnsMode.OFF, protectionRunning = false)
+
+        assertTrue(label, label.contains("防護未啟動"))
+        assertFalse(label, label.contains("生效中"))
     }
 
     @Test
     fun strictPrivateDnsIsNeverReportedAsInEffect() {
-        val label = FilterPresentation.stateLabel(readyStatus(rules = 5), PrivateDnsMode.HOSTNAME)
+        val label = FilterPresentation.stateLabel(
+            readyStatus(rules = 5),
+            PrivateDnsMode.HOSTNAME,
+            protectionRunning = true
+        )
 
         assertTrue(label, label.contains("已暫停"))
     }
 
     @Test
     fun loadedRulesReadAsInEffectWhenTheSystemHandsItsQueriesOver() {
-        val label = FilterPresentation.stateLabel(readyStatus(rules = 5), PrivateDnsMode.OFF)
+        val label = FilterPresentation.stateLabel(
+            readyStatus(rules = 5),
+            PrivateDnsMode.OFF,
+            protectionRunning = true
+        )
 
         assertTrue(label, label.contains("生效中"))
+    }
+
+    /**
+     * The whole point of the protection flag: the local filter is always configured now, so stored
+     * rules alone must not be presented as rules that are doing something.
+     */
+    @Test
+    fun storedRulesWithProtectionOffSayProtectionIsNotRunningRatherThanInEffect() {
+        val status = readyStatus(rules = 5)
+
+        val running = FilterPresentation.stateLabel(status, PrivateDnsMode.OFF, protectionRunning = true)
+        val stopped = FilterPresentation.stateLabel(status, PrivateDnsMode.OFF, protectionRunning = false)
+
+        assertTrue(running, running.contains("生效中"))
+        assertTrue(stopped, stopped.contains("防護未啟動"))
+        assertFalse("protection off must never read as being in effect", stopped.contains("生效中"))
+        assertNotEquals(running, stopped)
     }
 
     @Test
@@ -54,7 +84,8 @@ class FilterPresentationTest {
         )
         val label = FilterPresentation.stateLabel(
             FilterStatus.of(settings, FilterSnapshot.EMPTY),
-            PrivateDnsMode.OFF
+            PrivateDnsMode.OFF,
+            protectionRunning = true
         )
 
         assertTrue(label, label.contains("更新失敗"))
@@ -62,15 +93,56 @@ class FilterPresentationTest {
 
     @Test
     fun aDownloadInProgressIsSaidBeforeAnythingElse() {
-        val label = FilterPresentation.stateLabel(readyStatus(rules = 5), PrivateDnsMode.HOSTNAME, busy = true)
+        val label = FilterPresentation.stateLabel(
+            readyStatus(rules = 5),
+            PrivateDnsMode.HOSTNAME,
+            protectionRunning = false,
+            busy = true
+        )
 
         assertEquals("正在下載清單…", label)
     }
 
     @Test
-    fun theOffChoiceIsWordedAsAChoice() {
-        assertEquals("關閉", FilterPresentation.strengthLabel(null))
+    fun theStrengthListIsExactlyTheThreeTiersAndTheOffChoiceIsGone() {
+        assertEquals("寬鬆", FilterPresentation.strengthLabel(FilterProfile.RELAXED))
         assertEquals("標準（推薦）", FilterPresentation.strengthLabel(FilterProfile.STANDARD))
+        assertEquals("嚴格", FilterPresentation.strengthLabel(FilterProfile.STRICT))
+
+        assertEquals(3, FilterProfile.entries.size)
+        assertEquals(FilterProfile.STANDARD, FilterProfile.DEFAULT)
+        for (profile in FilterProfile.entries) {
+            val label = FilterPresentation.strengthLabel(profile)
+            val detail = FilterPresentation.strengthDetail(profile)
+            assertFalse("the 關閉 wording is gone", label.contains("關閉"))
+            assertFalse("the 關閉 wording is gone", detail.contains("關閉"))
+            assertFalse("nothing claims rules are not applied", detail.contains("不會套用"))
+            assertTrue(label, label.isNotBlank())
+            assertTrue(detail, detail.isNotBlank())
+        }
+    }
+
+    /**
+     * The 過濾器管理 row describes one source, so it must show that source's own state — showing the
+     * local filter's master value there labelled a whole-filter state as one list's status.
+     */
+    @Test
+    fun theSourceRowShowsTheListsOwnStateNotTheFilterMaster() {
+        assertEquals("已啟用", FilterPresentation.mainListEnabledLabel(readyStatus(rules = 5)))
+
+        val listSwitchedOff = FilterStatus.of(
+            FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
+                FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
+                    state = SubscriptionState.READY,
+                    ruleCount = 5,
+                    enabled = false
+                )
+            ),
+            FilterSnapshot.EMPTY
+        )
+
+        assertTrue("the fixture must keep the filter itself configured", listSwitchedOff.enabled)
+        assertEquals("已停用", FilterPresentation.mainListEnabledLabel(listSwitchedOff))
     }
 
     @Test

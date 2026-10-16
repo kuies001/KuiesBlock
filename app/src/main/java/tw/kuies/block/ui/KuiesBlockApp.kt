@@ -168,14 +168,17 @@ fun KuiesBlockApp(
     }
 
     /**
-     * Applies a strength choice (`null` switches the filter off).
+     * Applies a strength choice.
+     *
+     * There is no "off" choice to pass any more: turning protection off is the home switch's job, and
+     * picking a tier only chooses which list is used — it never starts the tunnel.
      *
      * The coordinator calls back twice: immediately with the state that needs no network, then once
      * the download settled. Only the second callback clears the busy flag, so the screen cannot claim
      * the download finished while it is still running.
      */
-    fun selectFilterStrength(profile: FilterProfile?) {
-        filterBusy = profile != null
+    fun selectFilterStrength(profile: FilterProfile) {
+        filterBusy = true
         FilterCoordinatorHolder.get(appContext).selectStrength(
             profile = profile,
             onStatus = { status -> mainHandler.post { filterStatus = status } },
@@ -312,6 +315,13 @@ fun KuiesBlockApp(
     val protectionState = ProtectionStatusHolder.state
     val protectionError = ProtectionStatusHolder.error
 
+    // The strength section must not call stored rules 「生效中」 while protection is off: the local
+    // filter is always configured now (the 關閉 option is gone), so rules being stored says nothing
+    // about whether any query reaches them. The judgement is the app's existing one — only a tunnel
+    // that really came up counts — so the home screen and the settings page cannot disagree.
+    // `ProtectionStatusHolder.state` is Compose state, so this recomposes when the service reports.
+    val protectionRunning = ProtectionStateRules.isInterceptionActive(protectionState)
+
     // The home screen renders the running state and nothing about DNS: no status derivation, no
     // counters. `ProtectionStatusHolder.state` is what the service last reported, so a claim of
     // 「防護已啟用」 can only come from the tunnel that really came up and verified its DNS path.
@@ -334,6 +344,7 @@ fun KuiesBlockApp(
             filterUpdating = filterUpdating,
             subscriptionBusyId = subscriptionBusyId,
             privateDnsMode = privateDnsMode,
+            protectionRunning = protectionRunning,
             onSelectStrength = { profile -> selectFilterStrength(profile) },
             onUpdateFilterNow = { updateFilterNow() },
             onAddManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = true) },

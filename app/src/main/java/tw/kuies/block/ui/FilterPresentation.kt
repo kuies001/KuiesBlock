@@ -14,25 +14,25 @@ import tw.kuies.block.filter.SubscriptionState
  *
  * Pure and free of Compose and of resources, exactly like [ProtectionPresentation], so the wording
  * that decides what the user is told can be unit tested. It never claims more than the status it was
- * given: "生效中" is only reachable when rules are really published *and* the system is still handing
- * its queries to the tunnel.
+ * given: "生效中" is only reachable when rules are really published *and* the tunnel is running *and*
+ * the system is still handing its queries to the tunnel.
  */
 object FilterPresentation {
 
     /**
-     * The strength as the user sees it. `null` is the filter switched off — a real choice, not an
-     * error state.
+     * The strength as the user sees it.
+     *
+     * Only the three tiers exist: the 關閉 choice was removed, so there is no off state to name here —
+     * the home screen's protection switch is the single on/off.
      */
-    fun strengthLabel(profile: FilterProfile?): String = when (profile) {
-        null -> "關閉"
+    fun strengthLabel(profile: FilterProfile): String = when (profile) {
         FilterProfile.RELAXED -> "寬鬆"
         FilterProfile.STANDARD -> "標準（推薦）"
         FilterProfile.STRICT -> "嚴格"
     }
 
     /** A one-line description of what the chosen tier does, so 嚴格's aggressiveness is not a surprise. */
-    fun strengthDetail(profile: FilterProfile?): String = when (profile) {
-        null -> "目前不會套用任何本機規則。"
+    fun strengthDetail(profile: FilterProfile): String = when (profile) {
         FilterProfile.RELAXED -> "只擋最明顯的廣告與追蹤網域，誤擋機會最低。"
         FilterProfile.STANDARD -> "廣泛攔截廣告與追蹤網域，日常使用的建議選項。"
         FilterProfile.STRICT -> "攔截最積極，可能影響部分網站或 App 的功能。"
@@ -40,14 +40,26 @@ object FilterPresentation {
 
     /**
      * The effective state, in the order the user needs it:
-     * off → paused by Private DNS → not ready → in effect.
+     * a download in progress → protection not running → paused by Private DNS → not ready → in effect.
      *
      * [busy] is a download in progress, which is reported before anything else because it explains
      * why the numbers have not moved yet.
+     *
+     * [protectionRunning] says whether the tunnel is really intercepting (`ACTIVE`, the one state that
+     * means DNS is verified — see [tw.kuies.block.core.ProtectionStateRules.isInterceptionActive]).
+     * It has to be checked here, before anything can read as 「生效中」: the local filter is always
+     * *configured* now (the 關閉 option is gone, and a legacy stored off value migrates to configured),
+     * so stored rules say nothing about whether they can take effect — with protection off, no query
+     * ever reaches them.
      */
-    fun stateLabel(status: FilterStatus, privateDnsMode: PrivateDnsMode, busy: Boolean = false): String {
+    fun stateLabel(
+        status: FilterStatus,
+        privateDnsMode: PrivateDnsMode,
+        protectionRunning: Boolean,
+        busy: Boolean = false
+    ): String {
         if (busy) return "正在下載清單…"
-        if (!status.enabled) return "未啟用"
+        if (!protectionRunning) return "防護未啟動：在首頁開啟防護後，本機規則才會生效。"
 
         return when (LocalFilterPolicy.state(privateDnsMode, status.effectiveRuleCount)) {
             // Strict Private DNS is decided first on purpose: rules may be loaded and still do nothing,
@@ -84,6 +96,20 @@ object FilterPresentation {
     fun mainListName(status: FilterStatus): String = status.profileListName
 
     fun sourceEnabledLabel(enabled: Boolean): String = if (enabled) "已啟用" else "已停用"
+
+    /**
+     * The built-in main list's own state, for the 過濾器管理 row.
+     *
+     * Deliberately the list's own flag and **not** [FilterStatus.enabled]: that is the local filter's
+     * master value, which no screen can switch any more (it is always configured), so showing it here
+     * described the whole filter with one source's label. The row is about this list only.
+     */
+    fun mainListEnabledLabel(status: FilterStatus): String =
+        sourceEnabledLabel(
+            status.subscriptions
+                .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
+                ?.enabled == true
+        )
 
     /**
      * How many rules the engine can match right now.

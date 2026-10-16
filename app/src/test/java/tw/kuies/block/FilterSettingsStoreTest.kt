@@ -38,11 +38,42 @@ class FilterSettingsStoreTest {
 
         assertEquals(FilterSettings.DEFAULTS, loaded)
         assertEquals(FilterProfile.STANDARD, loaded.profile)
+        assertTrue("the local filter is always configured now", loaded.enabled)
         assertEquals(1, loaded.subscriptions.size)
         assertTrue(loaded.customSubscriptions.isEmpty())
         assertTrue(loaded.manualAllow.isEmpty())
         assertTrue(loaded.manualBlock.isEmpty())
         assertTrue(loaded.etags.isEmpty())
+    }
+
+    /**
+     * The migration the removal of the 關閉 option decided on (2026-10-16, option A).
+     *
+     * A build before that decision persisted `enabled=false` for the 關閉 choice. Loading it must
+     * produce "configured" — never an off filter again, and never anything that could start the VPN
+     * by itself: loading is a read, and protection is only ever started by the home switch.
+     */
+    @Test
+    fun aLegacyStoredOffFlagLoadsAsConfiguredAndIsNeverHonouredAgain() {
+        val legacy = FilterSettings.forProfile(FilterProfile.STANDARD)
+            .withEnabled(false)
+            .withSubscription(
+                FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
+                    state = SubscriptionState.READY,
+                    ruleCount = 161_902,
+                    lastSuccessAtMillis = 1_700_000_000_000L
+                )
+            )
+        store.save(legacy)
+        assertFalse("the fixture must really hold the legacy off value", prefs.getBoolean("enabled", true))
+
+        val loaded = store.load()
+
+        assertTrue("a legacy 關閉 migrates to configured", loaded.enabled)
+        assertEquals("the chosen tier is kept", FilterProfile.STANDARD, loaded.profile)
+        assertEquals("the downloaded list is kept", 161_902, loaded.builtInSubscription!!.ruleCount)
+        assertEquals(SubscriptionState.READY, loaded.builtInSubscription!!.state)
+        assertEquals(1_700_000_000_000L, loaded.builtInSubscription!!.lastSuccessAtMillis ?: 0L)
     }
 
     @Test

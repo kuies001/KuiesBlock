@@ -13,10 +13,11 @@ import java.util.concurrent.Executors
  * on a real install. This class closes that gap and nothing more.
  *
  * Rules it keeps:
- *  * **Nothing happens until the user chooses a strength.** [FilterSettings.enabled] is false until
- *    then, so a fresh install neither downloads anything nor publishes a single rule.
- *  * **Publishing is immediate and local.** Switching on (or off) republishes from what is already
- *    stored before any network work, so the packet path never waits for a download.
+ *  * **Nothing is downloaded until the user chooses a strength.** A fresh install has no stored list,
+ *    so it neither downloads anything nor publishes a single rule — and nothing here starts
+ *    protection, which is the home screen's switch to throw.
+ *  * **Publishing is immediate and local.** Choosing a tier republishes from what is already stored
+ *    before any network work, so the packet path never waits for a download.
  *  * **A failed download never removes protection.** The updater keeps the previous content and the
  *    assembler keeps using it, exactly as [FilterSettings.contributesToSnapshot] describes.
  *  * **Parsing happens here, never on the packet path.** All of it runs on [dispatcher].
@@ -50,31 +51,31 @@ class FilterCoordinator(
     }
 
     /**
-     * Applies the user's choice.
+     * Applies the user's choice of [profile]: that tier's list is downloaded and the snapshot is
+     * republished from the stored settings.
      *
-     * [profile] = a tier: the filter switches on and that tier's list is downloaded. `null`: the
-     * filter switches off, and the stored lists are **kept** so choosing a tier again applies them
-     * without another download.
+     * There is no "switch the filter off" call any more. 關閉 was removed, so the only on/off is the
+     * home screen's protection switch, which this class never touches: choosing a strength picks a
+     * list, it never starts the tunnel.
      *
      * [onStatus] may be called twice — once immediately (the state that needs no network) and once
      * when the download settles — so the screen can show progress honestly instead of freezing.
      * [onFinished] is called exactly once, after the last [onStatus].
      */
     fun selectStrength(
-        profile: FilterProfile?,
+        profile: FilterProfile,
         onStatus: (FilterStatus) -> Unit = {},
         onFinished: () -> Unit = {}
     ) {
         dispatcher.execute {
             try {
                 val base = runCatching { store.load() }.getOrNull() ?: return@execute
-                val chosen = if (profile == null) base.withEnabled(false) else base.withProfile(profile)
+                val chosen = base.withProfile(profile)
                 runCatching { store.save(chosen) }
 
-                // Publish before touching the network: switching on with content already stored takes
-                // effect now, and switching off stops filtering now.
+                // Publish before touching the network: choosing a tier whose content is already
+                // stored takes effect now.
                 onStatus(FilterStatus.of(chosen, assembler.assemble(chosen)))
-                if (profile == null) return@execute
 
                 val settled = downloadProfileList(chosen)
                 onStatus(FilterStatus.of(settled, assembler.assemble(settled)))
@@ -84,11 +85,14 @@ class FilterCoordinator(
         }
     }
 
-    /** Re-downloads the enabled tier's list; a failure keeps whatever is stored. */
+    /** Re-downloads the configured tier's list; a failure keeps whatever is stored. */
     fun refresh(onResult: (FilterStatus) -> Unit = {}) {
         dispatcher.execute {
             val settings = runCatching { store.load() }.getOrNull() ?: return@execute
-            val refreshed = if (settings.enabled) downloadProfileList(settings) else settings
+            // No enabled gate: 關閉 is gone, so every stored settings object is configured and there
+            // is nothing left to switch off. Whether the tunnel runs is the home switch's business and
+            // does not stop the stored list from being kept up to date.
+            val refreshed = downloadProfileList(settings)
             onResult(FilterStatus.of(refreshed, assembler.assemble(refreshed)))
         }
     }

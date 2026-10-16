@@ -53,7 +53,9 @@ fun SettingsScreen(
     filterUpdating: Boolean,
     subscriptionBusyId: String?,
     privateDnsMode: PrivateDnsMode,
-    onSelectStrength: (FilterProfile?) -> Unit,
+    /** Whether the tunnel is really intercepting; the strength section must not promise rules are in effect without it. */
+    protectionRunning: Boolean,
+    onSelectStrength: (FilterProfile) -> Unit,
     onUpdateFilterNow: () -> Unit,
     /** [isAllow] picks the list the rule belongs to; the two lists are edited by the same pair. */
     onAddManualRule: (ManualRule, Boolean) -> Unit,
@@ -79,6 +81,7 @@ fun SettingsScreen(
             status = filterStatus,
             busy = filterBusy,
             privateDnsMode = privateDnsMode,
+            protectionRunning = protectionRunning,
             onSelectStrength = onSelectStrength
         )
         FilterSourceSection(
@@ -158,7 +161,7 @@ private fun FilterSourceSection(
         )
         LabeledValue(
             label = stringResource(R.string.filter_source_enabled),
-            value = FilterPresentation.sourceEnabledLabel(status.enabled)
+            value = FilterPresentation.mainListEnabledLabel(status)
         )
         LabeledValue(
             label = stringResource(R.string.filter_source_rules),
@@ -185,16 +188,18 @@ private fun FilterSourceSection(
 /**
  * The interception strength, plus the state that decides whether it is really doing anything.
  *
- * 「關閉」 is a real option, not an empty one: it is what a fresh install has, and choosing it keeps
- * the downloaded lists on disk. The state line is derived by [FilterPresentation], which cannot say
- * 「生效中」 while the system Private DNS owns name resolution.
+ * Only the three tiers are offered: the 關閉 choice was removed, so the local filter is always
+ * configured and the home screen's protection switch is the single on/off. The state line is derived
+ * by [FilterPresentation], which cannot say 「生效中」 while protection is not running or while the
+ * system Private DNS owns name resolution.
  */
 @Composable
 private fun InterceptionStrengthSection(
     status: FilterStatus?,
     busy: Boolean,
     privateDnsMode: PrivateDnsMode,
-    onSelectStrength: (FilterProfile?) -> Unit
+    protectionRunning: Boolean,
+    onSelectStrength: (FilterProfile) -> Unit
 ) {
     SectionCard(title = stringResource(R.string.settings_filter_section)) {
         Text(
@@ -202,25 +207,20 @@ private fun InterceptionStrengthSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        StrengthOption(
-            profile = null,
-            selected = status != null && !status.enabled,
-            enabled = !busy,
-            onSelectStrength = onSelectStrength
-        )
         FilterProfile.entries.forEach { profile ->
             StrengthOption(
                 profile = profile,
                 // Until the settings have loaded, nothing is marked as the current choice.
-                selected = status != null && status.enabled && status.profile == profile,
+                selected = status != null && status.profile == profile,
                 enabled = !busy,
                 onSelectStrength = onSelectStrength
             )
         }
         LabeledValue(
             label = stringResource(R.string.filter_state_label),
-            value = status?.let { FilterPresentation.stateLabel(it, privateDnsMode, busy) }
-                ?: stringResource(R.string.filter_state_label_loading)
+            value = status?.let {
+                FilterPresentation.stateLabel(it, privateDnsMode, protectionRunning, busy)
+            } ?: stringResource(R.string.filter_state_label_loading)
         )
     }
 }
@@ -228,10 +228,10 @@ private fun InterceptionStrengthSection(
 /** One row of the strength list; a radio row rather than a chip, which cannot overflow at 320dp. */
 @Composable
 private fun StrengthOption(
-    profile: FilterProfile?,
+    profile: FilterProfile,
     selected: Boolean,
     enabled: Boolean,
-    onSelectStrength: (FilterProfile?) -> Unit
+    onSelectStrength: (FilterProfile) -> Unit
 ) {
     Row(
         modifier = Modifier

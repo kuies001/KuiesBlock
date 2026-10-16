@@ -24,7 +24,14 @@ data class SubscriptionStatus(
 data class FilterStatus(
     val profile: FilterProfile,
     val profileListName: String,
-    /** Whether the local filter is switched on at all ([FilterSettings.enabled]). */
+    /**
+     * Whether the local filter is configured at all ([FilterSettings.enabled]).
+     *
+     * Always true for settings read from the store: the 關閉 option is gone, so this no longer means
+     * "the user switched filtering off". Whether rules can take effect is the protection state's
+     * business, not this flag's — [tw.kuies.block.ui.FilterPresentation.stateLabel] reads that
+     * separately.
+     */
     val enabled: Boolean,
     val subscriptions: List<SubscriptionStatus>,
     /** Rules contributed by subscriptions to the published snapshot. */
