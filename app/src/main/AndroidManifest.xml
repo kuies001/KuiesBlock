@@ -18,6 +18,9 @@
     <!-- Android 13 (API 33) requires this to show the ongoing VPN notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets the app be told about a restart so it can offer to restore protection (best effort). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -58,6 +61,24 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="local_vpn_foundation_dns_blocking" />
         </service>
+
+        <!--
+          Best-effort protection restore after a restart, on top of the system's Always-on VPN (which
+          is the reliable mechanism and needs nothing here).
+
+          Exported because BOOT_COMPLETED is delivered to manifest receivers by component name. The
+          receiver acts on that action only, is idempotent, and asks BootAutostartPolicy first, so a
+          third party triggering it can at most start the user's own VPN — it can never change a
+          setting, open a dialog or stop another VPN.
+        -->
+        <receiver
+            android:name=".vpn.BootProtectionReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
