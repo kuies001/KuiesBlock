@@ -63,6 +63,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Robolectric needs the merged resources, and the WorkManager test harness needs a real Context.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -80,6 +87,10 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockwebserver3)
     testImplementation(libs.okhttp.tls)
+    // The official WorkManager test harness, so the scheduler and the worker can be verified without a
+    // device: no emulator on this machine has ever booted, so instrumented tests have no target.
+    testImplementation(libs.androidx.work.testing)
+    testImplementation(libs.robolectric)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
