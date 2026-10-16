@@ -36,6 +36,8 @@ import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.filter.FilterCoordinatorHolder
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterStatus
+import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.UnderlyingNetworkFinder
 import tw.kuies.block.vpn.VpnAuthorization
@@ -74,6 +76,10 @@ fun KuiesBlockApp(
     // A manual update is separate from choosing a strength: it re-downloads the list that is already
     // in use, so the two must not share one flag and make the screen describe the wrong action.
     var filterUpdating by remember { mutableStateOf(false) }
+
+    // Which custom source is downloading right now, if any. Per source on purpose: one busy row must
+    // not make every other row look like it is working.
+    var subscriptionBusyId by remember { mutableStateOf<String?>(null) }
 
     // Private DNS mode as state, not a value read during composition: only a state write can
     // recompose, so reading it at the call site left the strength section describing a mode the user
@@ -194,6 +200,66 @@ fun KuiesBlockApp(
         }
     }
 
+    /**
+     * Adds or removes one of the user's own rules.
+     *
+     * Local only: the coordinator writes the settings and republishes the snapshot on its own thread,
+     * so a running tunnel picks the change up on its next query and nothing is downloaded.
+     */
+    fun editManualRule(rule: ManualRule, isAllow: Boolean, add: Boolean) {
+        val coordinator = FilterCoordinatorHolder.get(appContext)
+        val onStatus: (FilterStatus) -> Unit = { status -> mainHandler.post { filterStatus = status } }
+        when {
+            isAllow && add -> coordinator.addManualAllow(rule, onStatus)
+            isAllow -> coordinator.removeManualAllow(rule.domain, onStatus)
+            add -> coordinator.addManualBlock(rule, onStatus)
+            else -> coordinator.removeManualBlock(rule.domain, onStatus)
+        }
+    }
+
+    /**
+     * Adds a custom source and fetches it straight away.
+     *
+     * A source the user just typed in should not sit empty waiting for a second tap, so the download
+     * follows immediately; the row shows itself as busy until it settles.
+     */
+    fun addCustomSubscription(subscription: FilterSubscription) {
+        val coordinator = FilterCoordinatorHolder.get(appContext)
+        subscriptionBusyId = subscription.id
+        coordinator.addSubscription(subscription) { status ->
+            mainHandler.post { filterStatus = status }
+            coordinator.updateSubscription(subscription) { updated ->
+                mainHandler.post {
+                    filterStatus = updated
+                    subscriptionBusyId = null
+                }
+            }
+        }
+    }
+
+    fun setSubscriptionEnabled(subscription: FilterSubscription, enabled: Boolean) {
+        FilterCoordinatorHolder.get(appContext).setSubscriptionEnabled(subscription, enabled) { status ->
+            mainHandler.post { filterStatus = status }
+        }
+    }
+
+    fun updateSubscription(subscription: FilterSubscription) {
+        if (subscriptionBusyId != null) return
+        subscriptionBusyId = subscription.id
+        FilterCoordinatorHolder.get(appContext).updateSubscription(subscription) { status ->
+            mainHandler.post {
+                filterStatus = status
+                subscriptionBusyId = null
+            }
+        }
+    }
+
+    fun deleteSubscription(subscription: FilterSubscription) {
+        FilterCoordinatorHolder.get(appContext).removeSubscription(subscription.id) { status ->
+            mainHandler.post { filterStatus = status }
+        }
+    }
+
     fun onToggleProtection() {
         when (ProtectionStatusHolder.state) {
             ProtectionState.ACTIVE, ProtectionState.STARTING -> {
@@ -266,9 +332,18 @@ fun KuiesBlockApp(
             filterStatus = filterStatus,
             filterBusy = filterBusy,
             filterUpdating = filterUpdating,
+            subscriptionBusyId = subscriptionBusyId,
             privateDnsMode = privateDnsMode,
             onSelectStrength = { profile -> selectFilterStrength(profile) },
             onUpdateFilterNow = { updateFilterNow() },
+            onAddManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = true) },
+            onRemoveManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = false) },
+            onAddSubscription = { subscription -> addCustomSubscription(subscription) },
+            onSetSubscriptionEnabled = { subscription, enabled ->
+                setSubscriptionEnabled(subscription, enabled)
+            },
+            onUpdateSubscription = { subscription -> updateSubscription(subscription) },
+            onDeleteSubscription = { subscription -> deleteSubscription(subscription) },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier

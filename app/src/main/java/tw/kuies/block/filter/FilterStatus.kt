@@ -34,7 +34,15 @@ data class FilterStatus(
     /** Everything the engine can match against right now. */
     val effectiveRuleCount: Int,
     val hasUsableRules: Boolean,
-    val snapshotVersion: Long
+    val snapshotVersion: Long,
+    /**
+     * The user's own rules and sources, carried as the settings objects rather than as counts: a
+     * screen that offers to remove or update one needs the object to act on, and rebuilding it from a
+     * count would be guesswork.
+     */
+    val manualAllow: List<ManualRule> = emptyList(),
+    val manualBlock: List<ManualRule> = emptyList(),
+    val customSources: List<FilterSubscription> = emptyList()
 ) {
     companion object {
         fun of(settings: FilterSettings, snapshot: FilterSnapshot): FilterStatus = FilterStatus(
@@ -57,7 +65,10 @@ data class FilterStatus(
             manualRuleCount = snapshot.userRuleCount,
             effectiveRuleCount = snapshot.subscriptionRuleCount + snapshot.userRuleCount,
             hasUsableRules = !snapshot.isEmpty,
-            snapshotVersion = snapshot.version
+            snapshotVersion = snapshot.version,
+            manualAllow = settings.manualAllow,
+            manualBlock = settings.manualBlock,
+            customSources = settings.customSubscriptions
         )
     }
 }

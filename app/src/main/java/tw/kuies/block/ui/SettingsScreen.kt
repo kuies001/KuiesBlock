@@ -32,6 +32,8 @@ import tw.kuies.block.dns.DnsResolutionState
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterStatus
+import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.ManualRule
 
 /**
  * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
@@ -49,9 +51,17 @@ fun SettingsScreen(
     filterStatus: FilterStatus?,
     filterBusy: Boolean,
     filterUpdating: Boolean,
+    subscriptionBusyId: String?,
     privateDnsMode: PrivateDnsMode,
     onSelectStrength: (FilterProfile?) -> Unit,
     onUpdateFilterNow: () -> Unit,
+    /** [isAllow] picks the list the rule belongs to; the two lists are edited by the same pair. */
+    onAddManualRule: (ManualRule, Boolean) -> Unit,
+    onRemoveManualRule: (ManualRule, Boolean) -> Unit,
+    onAddSubscription: (FilterSubscription) -> Unit,
+    onSetSubscriptionEnabled: (FilterSubscription, Boolean) -> Unit,
+    onUpdateSubscription: (FilterSubscription) -> Unit,
+    onDeleteSubscription: (FilterSubscription) -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -76,6 +86,28 @@ fun SettingsScreen(
             updating = filterUpdating,
             onUpdateNow = onUpdateFilterNow
         )
+        // The user's own rules and sources, rendered only once the status has been read: both sections
+        // act on the objects it carries rather than on a guess about what might be configured.
+        filterStatus?.let { status ->
+            AllowBlockSection(
+                allow = status.manualAllow,
+                block = status.manualBlock,
+                onAddAllow = { onAddManualRule(it, true) },
+                onAddBlock = { onAddManualRule(it, false) },
+                onRemoveAllow = { onRemoveManualRule(it, true) },
+                onRemoveBlock = { onRemoveManualRule(it, false) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            SubscriptionSection(
+                subscriptions = status.customSources,
+                busyId = subscriptionBusyId,
+                onAdd = onAddSubscription,
+                onSetEnabled = onSetSubscriptionEnabled,
+                onUpdate = onUpdateSubscription,
+                onDelete = onDeleteSubscription,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
         DiagnosticsSection(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
