@@ -26,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
+import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsResolutionState
@@ -53,8 +54,10 @@ fun SettingsScreen(
     filterUpdating: Boolean,
     subscriptionBusyId: String?,
     privateDnsMode: PrivateDnsMode,
-    /** Whether the tunnel is really intercepting; the strength section must not promise rules are in effect without it. */
-    protectionRunning: Boolean,
+    /** The real protection state; the strength section derives its status line from it. */
+    protectionState: ProtectionState,
+    /** Passed through so a failure says which failure it was, exactly as the home screen does. */
+    isServiceRunning: Boolean,
     onSelectStrength: (FilterProfile) -> Unit,
     onUpdateFilterNow: () -> Unit,
     /** [isAllow] picks the list the rule belongs to; the two lists are edited by the same pair. */
@@ -83,7 +86,8 @@ fun SettingsScreen(
             status = filterStatus,
             busy = filterBusy,
             privateDnsMode = privateDnsMode,
-            protectionRunning = protectionRunning,
+            protectionState = protectionState,
+            isServiceRunning = isServiceRunning,
             onSelectStrength = onSelectStrength
         )
         FilterSourceSection(
@@ -217,15 +221,16 @@ private fun FilterSourceSection(
  *
  * Only the three tiers are offered: the 關閉 choice was removed, so the local filter is always
  * configured and the home screen's protection switch is the single on/off. The state line is derived
- * by [FilterPresentation], which cannot say 「生效中」 while protection is not running or while the
- * system Private DNS owns name resolution.
+ * by [FilterPresentation] from the real [ProtectionState], which cannot say 「生效中」 while protection
+ * is not running, while it is starting, or while the system Private DNS owns name resolution.
  */
 @Composable
 private fun InterceptionStrengthSection(
     status: FilterStatus?,
     busy: Boolean,
     privateDnsMode: PrivateDnsMode,
-    protectionRunning: Boolean,
+    protectionState: ProtectionState,
+    isServiceRunning: Boolean,
     onSelectStrength: (FilterProfile) -> Unit
 ) {
     SectionCard(title = stringResource(R.string.settings_filter_section)) {
@@ -246,7 +251,7 @@ private fun InterceptionStrengthSection(
         LabeledValue(
             label = stringResource(R.string.filter_state_label),
             value = status?.let {
-                FilterPresentation.stateLabel(it, privateDnsMode, protectionRunning, busy)
+                FilterPresentation.stateLabel(it, privateDnsMode, protectionState, isServiceRunning, busy)
             } ?: stringResource(R.string.filter_state_label_loading)
         )
     }

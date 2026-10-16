@@ -1,5 +1,7 @@
 package tw.kuies.block.ui
 
+import tw.kuies.block.core.ProtectionState
+import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.BuiltInFilterAttribution
 import tw.kuies.block.filter.FilterProfile
@@ -39,33 +41,56 @@ object FilterPresentation {
     }
 
     /**
-     * The effective state, in the order the user needs it:
-     * a download in progress → protection not running → paused by Private DNS → not ready → in effect.
+     * The effective state, in the order the user needs it: a download in progress → whether
+     * interception is active at all → paused by Private DNS → not ready → in effect.
      *
      * [busy] is a download in progress, which is reported before anything else because it explains
      * why the numbers have not moved yet.
      *
-     * [protectionRunning] says whether the tunnel is really intercepting (`ACTIVE`, the one state that
-     * means DNS is verified — see [tw.kuies.block.core.ProtectionStateRules.isInterceptionActive]).
-     * It has to be checked here, before anything can read as 「生效中」: the local filter is always
-     * *configured* now (the 關閉 option is gone, and a legacy stored off value migrates to configured),
-     * so stored rules say nothing about whether they can take effect — with protection off, no query
-     * ever reaches them.
+     * [protectionState] is the real state the service reported, not a yes/no. Four of its cases must
+     * read differently, because they mean different things to the user:
+     *  * not running at all (`NOT_AUTHORIZED`, `AUTHORIZED_IDLE`) — the local filter is always
+     *    *configured* now (the 關閉 option is gone), so stored rules say nothing about whether any
+     *    query reaches them; with protection off no query ever does;
+     *  * `STARTING` — the tunnel is still coming up, so it is neither idle nor working yet;
+     *  * `ACTIVE` with the system still handing its queries over — the one case that may read as
+     *    「生效中」;
+     *  * `ERROR` — the app's own error wording, so a failure is never presented as a state the user
+     *    can just wait out.
+     *
+     * [tw.kuies.block.core.ProtectionStateRules.isInterceptionActive] answers the "is interception
+     * actually active" question, so the settings page and the home screen cannot disagree about it,
+     * and the whole thing stays fail-closed: only `ACTIVE` may reach the in-effect wording.
      */
     fun stateLabel(
         status: FilterStatus,
         privateDnsMode: PrivateDnsMode,
-        protectionRunning: Boolean,
+        protectionState: ProtectionState,
+        isServiceRunning: Boolean = false,
         busy: Boolean = false
     ): String {
         if (busy) return "正在下載清單…"
-        if (!protectionRunning) return "防護未啟動：在首頁開啟防護後，本機規則才會生效。"
+
+        if (!ProtectionStateRules.isInterceptionActive(protectionState)) {
+            return when (protectionState) {
+                ProtectionState.STARTING -> "正在啟動防護…"
+                ProtectionState.ERROR ->
+                    ProtectionPresentation.title(protectionState, isServiceRunning)
+                // Nothing is running here, and it is not a failure: a fresh install and a tunnel the
+                // user switched off are the same thing to this line.
+                ProtectionState.NOT_AUTHORIZED, ProtectionState.AUTHORIZED_IDLE -> "防護未啟動"
+                // Unreachable: isInterceptionActive() is true exactly for ACTIVE. Kept fail-closed so
+                // a future state can never inherit the 「生效中」 wording by falling into the branch
+                // below.
+                ProtectionState.ACTIVE -> "防護未啟動"
+            }
+        }
 
         return when (LocalFilterPolicy.state(privateDnsMode, status.effectiveRuleCount)) {
             // Strict Private DNS is decided first on purpose: rules may be loaded and still do nothing,
             // so this must never read as "生效中".
             LocalFilterState.PAUSED_PRIVATE_DNS ->
-                "已暫停：系統私人 DNS 為指定主機名稱，查詢不會經過本機。"
+                "本機規則已暫停：系統私人 DNS 為指定主機名稱，查詢不會經過本機。"
 
             LocalFilterState.NO_RULES -> if (profileUpdateFailed(status)) {
                 "上次更新失敗，目前沒有可用規則。"

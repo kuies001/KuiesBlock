@@ -396,13 +396,6 @@ fun KuiesBlockApp(
     val protectionState = ProtectionStatusHolder.state
     val protectionError = ProtectionStatusHolder.error
 
-    // The strength section must not call stored rules 「生效中」 while protection is off: the local
-    // filter is always configured now (the 關閉 option is gone), so rules being stored says nothing
-    // about whether any query reaches them. The judgement is the app's existing one — only a tunnel
-    // that really came up counts — so the home screen and the settings page cannot disagree.
-    // `ProtectionStatusHolder.state` is Compose state, so this recomposes when the service reports.
-    val protectionRunning = ProtectionStateRules.isInterceptionActive(protectionState)
-
     fun leaveGuide(completed: Boolean) {
         // Read before it is cleared: a replay returns to settings, a first run to the home screen.
         val replay = guideReplay
@@ -474,7 +467,10 @@ fun KuiesBlockApp(
             filterUpdating = filterUpdating,
             subscriptionBusyId = subscriptionBusyId,
             privateDnsMode = privateDnsMode,
-            protectionRunning = protectionRunning,
+            // The real state, not a yes/no: the strength section tells a fresh install, a start in
+            // progress, a working tunnel and a failure apart — see FilterPresentation.stateLabel.
+            protectionState = protectionState,
+            isServiceRunning = KuiesVpnService.isRunning,
             onSelectStrength = { profile -> selectFilterStrength(profile) },
             onUpdateFilterNow = { updateFilterNow() },
             onAddManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = true) },
