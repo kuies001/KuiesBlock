@@ -2,10 +2,12 @@ package tw.kuies.block.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,18 +31,26 @@ import tw.kuies.block.core.ProtectionStatusHolder
 import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.data.OnboardingGate
+import tw.kuies.block.data.ProtectionIntentStore
 import tw.kuies.block.dns.DnsConfigStore
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsDiagnostics
 import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
+import tw.kuies.block.filter.FilterAutoUpdateSettings
+import tw.kuies.block.filter.FilterAutoUpdateStore
 import tw.kuies.block.filter.FilterCoordinatorHolder
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterUpdateRecord
+import tw.kuies.block.filter.FilterUpdateSchedulePolicy
 import tw.kuies.block.filter.ManualRule
+import tw.kuies.block.filter.UpdateInterval
+import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
+import tw.kuies.block.vpn.AlwaysOnVpnProbe
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.OtherVpnProbe
 import tw.kuies.block.vpn.UnderlyingNetworkFinder
@@ -62,6 +72,9 @@ fun KuiesBlockApp(
     val appContext = context.applicationContext
     val settingsStore = remember(appContext) { AppSettingsStore(appContext) }
     val dnsStore = remember(appContext) { DnsConfigStore(appContext) }
+    val updateStore = remember(appContext) { FilterAutoUpdateStore(appContext) }
+    val protectionIntentStore = remember(appContext) { ProtectionIntentStore(appContext) }
+    val updateScheduler = remember(appContext) { WorkManagerPeriodicUpdateScheduler(appContext) }
     val executor = remember { Executors.newSingleThreadExecutor() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
@@ -109,6 +122,15 @@ fun KuiesBlockApp(
     // not make every other row look like it is working.
     var subscriptionBusyId by remember { mutableStateOf<String?>(null) }
 
+    // The automatic-update preference and the outcome of its last run, or null until they are read.
+    var autoUpdate by remember { mutableStateOf<FilterAutoUpdateSettings?>(null) }
+    var updateRecord by remember { mutableStateOf<FilterUpdateRecord?>(null) }
+
+    // Boot auto-start: the stored preference, and whether the system's Always-on VPN already owns the
+    // restore. Both are read from the platform, never inferred.
+    var bootAutostart by remember { mutableStateOf(false) }
+    var alwaysOnVpn by remember { mutableStateOf(false) }
+
     // Private DNS mode as state, not a value read during composition: only a state write can
     // recompose, so reading it at the call site left the strength section describing a mode the user
     // had already changed outside the app.
@@ -122,6 +144,13 @@ fun KuiesBlockApp(
         FilterCoordinatorHolder.get(appContext).publishCurrentAsync { status ->
             mainHandler.post { filterStatus = status }
         }
+        // Read the stored preferences once and make the platform agree with them, so an app update or a
+        // restore leaves the user's interval in force instead of losing the schedule.
+        val storedAutoUpdate = updateStore.load()
+        autoUpdate = storedAutoUpdate
+        updateRecord = updateStore.loadRecord()
+        bootAutostart = protectionIntentStore.bootAutostartEnabled()
+        FilterUpdateSchedulePolicy.apply(storedAutoUpdate, updateScheduler)
         onDispose { executor.shutdownNow() }
     }
 
@@ -144,6 +173,9 @@ fun KuiesBlockApp(
      */
     fun startTunnel() {
         settingsStore.setProtectionStarted()
+        // The user's last word on protection. A restart may only come back when it was "on" — this is
+        // what keeps a deliberate "turn protection off" from being undone at the next boot.
+        protectionIntentStore.setProtectionDesiredOn(true)
         ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStarting(), null)
         KuiesVpnService.start(appContext)
     }
@@ -217,6 +249,12 @@ fun KuiesBlockApp(
         privateDnsMode = PrivateDnsSettings.read(appContext).mode
         // Read-only probe for the guide's plain notice; it never stops or reconfigures that VPN.
         anotherVpnActive = OtherVpnProbe.anotherVpnHoldsTheSlot(appContext, KuiesVpnService.isRunning)
+        // Re-read on every resume: the user may have turned Android's Always-on VPN on or off in the
+        // system settings and come back, and this section must not describe the old answer.
+        alwaysOnVpn = AlwaysOnVpnProbe.isEnabledFor(
+            appContext.packageName,
+            AlwaysOnVpnProbe.readConfiguredApp(appContext)
+        )
         when {
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
             ProtectionStatusHolder.state == ProtectionState.NOT_AUTHORIZED ->
@@ -344,14 +382,57 @@ fun KuiesBlockApp(
         }
     }
 
+    /**
+     * Turns automatic updates on or off.
+     *
+     * The preference is stored first and the scheduler is then made to agree with it, so the platform
+     * and the screen cannot disagree. Switching it off cancels the periodic job only — 立即更新 keeps
+     * working exactly as before, because it never touches the scheduler.
+     */
+    fun setAutoUpdateEnabled(enabled: Boolean) {
+        val updated = updateStore.load().copy(enabled = enabled)
+        updateStore.save(updated)
+        autoUpdate = updated
+        FilterUpdateSchedulePolicy.apply(updated, updateScheduler)
+    }
+
+    /** Changes the interval. The unique job is updated in place, so no second job is ever created. */
+    fun setUpdateInterval(interval: UpdateInterval) {
+        val updated = updateStore.load().copy(interval = interval)
+        updateStore.save(updated)
+        autoUpdate = updated
+        FilterUpdateSchedulePolicy.apply(updated, updateScheduler)
+    }
+
+    fun setBootAutostart(enabled: Boolean) {
+        protectionIntentStore.setBootAutostartEnabled(enabled)
+        bootAutostart = enabled
+    }
+
+    /**
+     * Opens Android's own VPN screen so the user can set Always-on VPN themselves.
+     *
+     * Nothing is changed from here: the app explains and offers the door, and the system setting stays
+     * the user's decision. That is also why this is only ever reached by a tap.
+     */
+    fun openVpnSettings() {
+        runCatching {
+            appContext.startActivity(
+                Intent(Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
     fun onToggleProtection() {
         when (ProtectionStatusHolder.state) {
             ProtectionState.ACTIVE, ProtectionState.STARTING -> {
+                protectionIntentStore.setProtectionDesiredOn(false)
                 KuiesVpnService.stop(appContext)
                 ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
             }
             ProtectionState.ERROR -> {
                 if (KuiesVpnService.isRunning) {
+                    protectionIntentStore.setProtectionDesiredOn(false)
                     KuiesVpnService.stop(appContext)
                     ProtectionStatusHolder.update(ProtectionStateRules.afterServiceStopped(), null)
                 } else {
@@ -481,6 +562,15 @@ fun KuiesBlockApp(
             },
             onUpdateSubscription = { subscription -> updateSubscription(subscription) },
             onDeleteSubscription = { subscription -> deleteSubscription(subscription) },
+            autoUpdate = autoUpdate,
+            updateRecord = updateRecord,
+            onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },
+            onSetUpdateInterval = { interval -> setUpdateInterval(interval) },
+            bootAutostartEnabled = bootAutostart,
+            alwaysOnVpnEnabled = alwaysOnVpn,
+            anotherVpnActive = anotherVpnActive,
+            onSetBootAutostart = { enabled -> setBootAutostart(enabled) },
+            onOpenVpnSettings = { openVpnSettings() },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onReplayGuide = {
                 // A replay: the two pages are shown over settings, and leaving them records nothing

@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -31,10 +32,13 @@ import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsResolutionState
 import tw.kuies.block.dns.PrivateDnsMode
+import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.ManualRule
+import tw.kuies.block.filter.UpdateInterval
 
 /**
  * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
@@ -67,6 +71,17 @@ fun SettingsScreen(
     onSetSubscriptionEnabled: (FilterSubscription, Boolean) -> Unit,
     onUpdateSubscription: (FilterSubscription) -> Unit,
     onDeleteSubscription: (FilterSubscription) -> Unit,
+    /** The automatic-update preference and the outcome of its last run, or null until they are read. */
+    autoUpdate: FilterAutoUpdateSettings?,
+    updateRecord: FilterUpdateRecord?,
+    onSetAutoUpdateEnabled: (Boolean) -> Unit,
+    onSetUpdateInterval: (UpdateInterval) -> Unit,
+    /** Whether protection should come back by itself after a restart, and how the platform can help. */
+    bootAutostartEnabled: Boolean,
+    alwaysOnVpnEnabled: Boolean,
+    anotherVpnActive: Boolean,
+    onSetBootAutostart: (Boolean) -> Unit,
+    onOpenVpnSettings: () -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     /** Shows the two-page first-run guide again. Records nothing and changes no setting. */
     onReplayGuide: () -> Unit,
@@ -93,7 +108,11 @@ fun SettingsScreen(
         FilterSourceSection(
             status = filterStatus,
             updating = filterUpdating,
-            onUpdateNow = onUpdateFilterNow
+            autoUpdate = autoUpdate,
+            updateRecord = updateRecord,
+            onUpdateNow = onUpdateFilterNow,
+            onSetAutoUpdateEnabled = onSetAutoUpdateEnabled,
+            onSetUpdateInterval = onSetUpdateInterval
         )
         // The user's own rules and sources, rendered only once the status has been read: both sections
         // act on the objects it carries rather than on a guess about what might be configured.
@@ -117,6 +136,13 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        BootAutostartSection(
+            enabled = bootAutostartEnabled,
+            alwaysOnVpnEnabled = alwaysOnVpnEnabled,
+            anotherVpnActive = anotherVpnActive,
+            onSetEnabled = onSetBootAutostart,
+            onOpenVpnSettings = onOpenVpnSettings
+        )
         DiagnosticsSection(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
@@ -164,7 +190,11 @@ private fun GuideSection(onReplayGuide: () -> Unit) {
 private fun FilterSourceSection(
     status: FilterStatus?,
     updating: Boolean,
-    onUpdateNow: () -> Unit
+    autoUpdate: FilterAutoUpdateSettings?,
+    updateRecord: FilterUpdateRecord?,
+    onUpdateNow: () -> Unit,
+    onSetAutoUpdateEnabled: (Boolean) -> Unit,
+    onSetUpdateInterval: (UpdateInterval) -> Unit
 ) {
     SectionCard(title = stringResource(R.string.settings_filter_sources_section)) {
         if (status == null) {
@@ -213,6 +243,12 @@ private fun FilterSourceSection(
                 )
             )
         }
+        AutoUpdateControls(
+            settings = autoUpdate,
+            record = updateRecord,
+            onSetEnabled = onSetAutoUpdateEnabled,
+            onSetInterval = onSetUpdateInterval
+        )
     }
 }
 
@@ -421,6 +457,152 @@ private fun LabeledValue(label: String, value: String) {
         )
         Text(
             text = value,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+/**
+ * The automatic-update controls, inside 過濾器管理 on purpose: it keeps the lists that section already
+ * manages fresh, and 立即更新 stays the explicit action right above it.
+ *
+ * The detail line states the two things the switch alone cannot show — only lists that have already
+ * been downloaded are refreshed (see `FilterCoordinator.refreshAll`), and the platform may delay the
+ * run — because both are true of the implementation.
+ */
+@Composable
+private fun AutoUpdateControls(
+    settings: FilterAutoUpdateSettings?,
+    record: FilterUpdateRecord?,
+    onSetEnabled: (Boolean) -> Unit,
+    onSetInterval: (UpdateInterval) -> Unit
+) {
+    ToggleRow(
+        label = stringResource(R.string.filter_auto_update_title),
+        checked = settings?.enabled == true,
+        enabled = settings != null,
+        onCheckedChange = onSetEnabled
+    )
+    Text(
+        text = stringResource(R.string.filter_auto_update_detail),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    // The interval is only a real choice while automatic updates are on, so it is only offered then.
+    if (settings?.enabled == true) {
+        UpdateInterval.entries.forEach { interval ->
+            ChoiceRow(
+                label = stringResource(
+                    when (interval) {
+                        UpdateInterval.HOURS_8 -> R.string.filter_auto_update_interval_8
+                        UpdateInterval.HOURS_24 -> R.string.filter_auto_update_interval_24
+                    }
+                ),
+                selected = settings.interval == interval,
+                onSelect = { onSetInterval(interval) }
+            )
+        }
+    }
+    LabeledValue(
+        label = stringResource(R.string.filter_auto_update_last_check),
+        value = record?.let { FilterPresentation.lastCheckLabel(it, System.currentTimeMillis()) }
+            ?: stringResource(R.string.filter_state_label_loading)
+    )
+}
+
+/**
+ * Whether protection should come back by itself after a restart.
+ *
+ * The text is the honest part of this feature: the platform may delay or skip the attempt, and the
+ * reliable route is the system's own Always-on VPN, which the button opens. When that setting already
+ * points at KuiesBlock the section says the system owns the restore, so the switch below is never
+ * credited with something it did not do.
+ */
+@Composable
+private fun BootAutostartSection(
+    enabled: Boolean,
+    alwaysOnVpnEnabled: Boolean,
+    anotherVpnActive: Boolean,
+    onSetEnabled: (Boolean) -> Unit,
+    onOpenVpnSettings: () -> Unit
+) {
+    SectionCard(title = stringResource(R.string.settings_boot_section)) {
+        Text(
+            text = stringResource(R.string.settings_boot_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        ToggleRow(
+            label = stringResource(R.string.settings_boot_toggle),
+            checked = enabled,
+            enabled = true,
+            onCheckedChange = onSetEnabled
+        )
+        if (alwaysOnVpnEnabled) {
+            Text(
+                text = stringResource(R.string.settings_boot_always_on_active),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                text = stringResource(R.string.settings_boot_always_on_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(
+                onClick = onOpenVpnSettings,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.settings_boot_open_vpn_settings))
+            }
+        }
+        if (anotherVpnActive) {
+            Text(
+                text = stringResource(R.string.settings_boot_other_vpn),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** One on/off row: a switch, because it is independent of any choice listed under it. */
+@Composable
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+/** One row of a small exclusive choice; the same shape as the strength rows, so 320dp still fits. */
+@Composable
+private fun ChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect() }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Text(
+            text = label,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface
         )

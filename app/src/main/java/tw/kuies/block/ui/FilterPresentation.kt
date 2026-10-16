@@ -7,9 +7,11 @@ import tw.kuies.block.filter.BuiltInFilterAttribution
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.LocalFilterPolicy
 import tw.kuies.block.filter.LocalFilterState
 import tw.kuies.block.filter.SubscriptionState
+import tw.kuies.block.filter.UpdateCheckOutcome
 
 /**
  * How the interception strength is worded on screen.
@@ -107,6 +109,26 @@ object FilterPresentation {
         status.subscriptions
             .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
             ?.state == SubscriptionState.FAILED
+
+    /**
+     * The last *automatic* check, which is a different question from the last successful update above.
+     *
+     * A check that found nothing downloaded says so instead of implying success, and a failure says the
+     * previous lists are still in use — the same promise the updater really keeps.
+     */
+    fun lastCheckLabel(record: FilterUpdateRecord, now: Long): String {
+        val at = record.checkedAtMillis
+        // The time is omitted rather than guessed when it was never recorded.
+        val whenClause = if (at == null) "" else "${lastSuccessLabel(at, now)}，"
+        return when (val outcome = record.outcome) {
+            UpdateCheckOutcome.Never -> "尚未自動檢查。"
+            UpdateCheckOutcome.NothingToCheck -> "上次檢查：沒有已下載的清單可更新。"
+            UpdateCheckOutcome.AllCurrent -> "上次檢查：${whenClause}全部為最新。"
+            is UpdateCheckOutcome.Updated -> "上次檢查：${whenClause}已更新 ${outcome.count} 項。"
+            is UpdateCheckOutcome.Failed ->
+                "上次檢查：${whenClause}${outcome.count} 項失敗；仍使用上一次成功的清單。"
+        }
+    }
 
     /** Who maintains the built-in lists. The app ships URLs and attribution only, never the lists. */
     const val MAINTAINER = "HaGeZi"

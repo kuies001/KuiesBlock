@@ -3,6 +3,7 @@ package tw.kuies.block.filter
 import android.content.Context
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The one place that turns the stored settings plus the downloaded lists into the snapshot the VPN
@@ -29,6 +30,15 @@ class FilterCoordinator(
     private val contentStore: SubscriptionContentStore,
     private val dispatcher: Executor
 ) {
+
+    /**
+     * Guards the whole automatic sweep.
+     *
+     * Every update already runs on [dispatcher], so automatic and manual work cannot interleave; this
+     * flag is what stops a second sweep from starting while one is still going, which is the case a
+     * period firing just as the user taps 立即更新 would otherwise produce.
+     */
+    private val refreshAllInFlight = AtomicBoolean(false)
 
     /** Publishes what the stored settings and stored list text imply right now, with no network. */
     fun publishCurrent(): FilterStatus {
@@ -94,6 +104,89 @@ class FilterCoordinator(
             // does not stop the stored list from being kept up to date.
             val refreshed = downloadProfileList(settings)
             onResult(FilterStatus.of(refreshed, assembler.assemble(refreshed)))
+        }
+    }
+
+    /**
+     * Refreshes every source that already has downloaded content, and reports what it found.
+     *
+     * This is the automatic sweep. Two rules make it safe to run without the user watching:
+     *  * **A source with no stored content is never downloaded here.** Automatic updates default to
+     *    enabled, so downloading on first run would contradict the rule that nothing is fetched until
+     *    the user picks a strength; a fresh install therefore checks nothing and downloads nothing.
+     *  * **A failure keeps the previous list.** [SubscriptionUpdater] already guarantees that, so this
+     *    only has to record the outcome.
+     *
+     * Runs on [dispatcher], which is what serialises it against a manual 立即更新 — the second one to
+     * arrive waits rather than downloading the same list twice.
+     */
+    fun refreshAll(onFinished: (FilterRefreshSummary) -> Unit = {}) {
+        dispatcher.execute {
+            if (!refreshAllInFlight.compareAndSet(false, true)) {
+                onFinished(FilterRefreshSummary.NOT_RUN)
+                return@execute
+            }
+            try {
+                // Elvis rather than a separate null check: it keeps `settings` non-null for everything
+                // below — including the bookkeeping variable — without depending on a smart cast.
+                val settings = runCatching { store.load() }.getOrNull() ?: run {
+                    onFinished(FilterRefreshSummary.NOT_RUN)
+                    return@execute
+                }
+
+                val targets = settings.subscriptions.filter { it.enabled && it.ruleCount > 0 }
+                var current = settings
+                var updated = 0
+                var unchanged = 0
+                var failed = 0
+                var skipped = 0
+
+                for (target in targets) {
+                    val before = current.subscriptions.firstOrNull { it.id == target.id } ?: continue
+                    val result = updater.update(
+                        SubscriptionUpdateRequest(
+                            subscription = before,
+                            profile = current.profile,
+                            etag = current.etagFor(before.id)
+                        )
+                    )
+                    when (result) {
+                        is SubscriptionUpdateResult.Updated -> {
+                            current = current.withSubscription(result.subscription)
+                                .withEtag(before.id, result.etag)
+                            updated++
+                        }
+                        is SubscriptionUpdateResult.Unchanged -> {
+                            current = current.withSubscription(result.subscription)
+                            unchanged++
+                        }
+                        is SubscriptionUpdateResult.Failed -> {
+                            current = current.withSubscription(result.subscription)
+                            failed++
+                        }
+                        // Another update for this list held the single flight; that one persists itself.
+                        SubscriptionUpdateResult.SkippedInFlight -> skipped++
+                    }
+                }
+
+                // Written once for the whole sweep, then republished once: a partial settings file
+                // between two sources would describe a state the user never had.
+                runCatching { store.save(current) }
+                if (targets.isNotEmpty()) {
+                    runCatching { assembler.assemble(current) }
+                }
+                onFinished(
+                    FilterRefreshSummary(
+                        considered = targets.size,
+                        updated = updated,
+                        unchanged = unchanged,
+                        failed = failed,
+                        skipped = skipped
+                    )
+                )
+            } finally {
+                refreshAllInFlight.set(false)
+            }
         }
     }
 

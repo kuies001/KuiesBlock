@@ -56,4 +56,20 @@
     <string name="filter_source_last_update">最近一次更新</string>
     <string name="filter_source_update_now">立即更新</string>
     <string name="filter_source_updating">更新中…</string>
+
+    <!-- 自動更新只處理「已下載過」的清單，且系統可能延後執行，文案必須照實說。 -->
+    <string name="filter_auto_update_title">自動更新過濾規則</string>
+    <string name="filter_auto_update_detail">只更新已下載過的清單；系統可能因省電而延後執行。</string>
+    <string name="filter_auto_update_interval_8">每 8 小時</string>
+    <string name="filter_auto_update_interval_24">每 24 小時</string>
+    <string name="filter_auto_update_last_check">最近一次自動檢查</string>
+
+    <!-- 開機自動啟動：預設關閉，且不宣稱一定成功。 -->
+    <string name="settings_boot_section">開機自動啟動防護</string>
+    <string name="settings_boot_toggle">開機後自動恢復防護</string>
+    <string name="settings_boot_body">手機重新開機後，嘗試自動恢復 KuiesBlock 防護。需先完成 VPN 授權。</string>
+    <string name="settings_boot_always_on_hint">Android 可能延後或略過這個動作（例如 App 曾被強制停止）。若要在重新開機後更可靠地恢復，請在系統設定開啟 KuiesBlock 的「一律開啟的 VPN」。</string>
+    <string name="settings_boot_always_on_active">系統的「一律開啟的 VPN」已設為 KuiesBlock，開機後由系統負責恢復。</string>
+    <string name="settings_boot_open_vpn_settings">開啟系統 VPN 設定</string>
+    <string name="settings_boot_other_vpn">偵測到其他 VPN 正在使用，KuiesBlock 不會搶佔 VPN 位置。</string>
 </resources>
