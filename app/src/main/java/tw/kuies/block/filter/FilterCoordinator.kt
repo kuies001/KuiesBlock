@@ -3,6 +3,7 @@ package tw.kuies.block.filter
 import android.content.Context
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -108,85 +109,102 @@ class FilterCoordinator(
     }
 
     /**
-     * Refreshes every source that already has downloaded content, and reports what it found.
+     * Refreshes the sources an automatic sweep is allowed to touch, and reports what it found.
      *
-     * This is the automatic sweep. Two rules make it safe to run without the user watching:
-     *  * **A source with no stored content is never downloaded here.** Automatic updates default to
-     *    enabled, so downloading on first run would contradict the rule that nothing is fetched until
-     *    the user picks a strength; a fresh install therefore checks nothing and downloads nothing.
+     * Two rules make it safe to run without the user watching:
+     *  * **A source with nothing downloaded and no attempt behind it is never fetched here.**
+     *    Automatic updates default to enabled, so downloading on first run would contradict the rule
+     *    that nothing is fetched until the user picks a strength. [FilterAutoUpdateSelection] is the
+     *    whole of that decision.
      *  * **A failure keeps the previous list.** [SubscriptionUpdater] already guarantees that, so this
      *    only has to record the outcome.
      *
-     * Runs on [dispatcher], which is what serialises it against a manual 立即更新 — the second one to
-     * arrive waits rather than downloading the same list twice.
+     * Serialisation: the download itself runs on [dispatcher], which is a single thread, so a sweep and
+     * a manual 立即更新 can never be *inside* [SubscriptionUpdater] at the same time. That is why the
+     * second of two consecutive updates of the same list is a conditional request carrying the ETag the
+     * first one just stored, rather than a second download of the same content.
+     *
+     * The [refreshAllInFlight] claim is taken **before** the work is queued, on the caller's thread. A
+     * claim taken inside the queued task could never fire: the second sweep would simply wait its turn
+     * behind the first and then find the flag free again, so the guard would read as protection while
+     * doing nothing at all.
      */
     fun refreshAll(onFinished: (FilterRefreshSummary) -> Unit = {}) {
-        dispatcher.execute {
-            if (!refreshAllInFlight.compareAndSet(false, true)) {
+        if (!refreshAllInFlight.compareAndSet(false, true)) {
+            onFinished(FilterRefreshSummary.NOT_RUN)
+            return
+        }
+        try {
+            dispatcher.execute { sweep(onFinished) }
+        } catch (_: RejectedExecutionException) {
+            // A shut-down dispatcher must not strand the claim for the life of the process.
+            refreshAllInFlight.set(false)
+            onFinished(FilterRefreshSummary.NOT_RUN)
+        }
+    }
+
+    /** The sweep itself; runs on [dispatcher] and releases the claim on every path. */
+    private fun sweep(onFinished: (FilterRefreshSummary) -> Unit) {
+        try {
+            // Elvis rather than a separate null check: it keeps `settings` non-null for everything
+            // below — including the bookkeeping variable — without depending on a smart cast.
+            val settings = runCatching { store.load() }.getOrNull() ?: run {
                 onFinished(FilterRefreshSummary.NOT_RUN)
-                return@execute
+                return
             }
-            try {
-                // Elvis rather than a separate null check: it keeps `settings` non-null for everything
-                // below — including the bookkeeping variable — without depending on a smart cast.
-                val settings = runCatching { store.load() }.getOrNull() ?: run {
-                    onFinished(FilterRefreshSummary.NOT_RUN)
-                    return@execute
-                }
 
-                val targets = FilterAutoUpdateSelection.select(settings)
-                var current = settings
-                var updated = 0
-                var unchanged = 0
-                var failed = 0
-                var skipped = 0
+            val targets = FilterAutoUpdateSelection.select(settings)
+            var current = settings
+            var updated = 0
+            var unchanged = 0
+            var failed = 0
+            var skipped = 0
 
-                for (target in targets) {
-                    val before = current.subscriptions.firstOrNull { it.id == target.id } ?: continue
-                    val result = updater.update(
-                        SubscriptionUpdateRequest(
-                            subscription = before,
-                            profile = current.profile,
-                            etag = current.etagFor(before.id)
-                        )
-                    )
-                    when (result) {
-                        is SubscriptionUpdateResult.Updated -> {
-                            current = current.withSubscription(result.subscription)
-                                .withEtag(before.id, result.etag)
-                            updated++
-                        }
-                        is SubscriptionUpdateResult.Unchanged -> {
-                            current = current.withSubscription(result.subscription)
-                            unchanged++
-                        }
-                        is SubscriptionUpdateResult.Failed -> {
-                            current = current.withSubscription(result.subscription)
-                            failed++
-                        }
-                        // Another update for this list held the single flight; that one persists itself.
-                        SubscriptionUpdateResult.SkippedInFlight -> skipped++
-                    }
-                }
-
-                // Written once for the whole sweep, then republished once: a partial settings file
-                // between two sources would describe a state the user never had.
-                runCatching { store.save(current) }
-                if (targets.isNotEmpty()) {
-                    runCatching { assembler.assemble(current) }
-                }
-                onFinished(
-                    FilterRefreshSummary(
-                        considered = targets.size,
-                        updated = updated,
-                        unchanged = unchanged,
-                        failed = failed,
-                        skipped = skipped
+            for (target in targets) {
+                val before = current.subscriptions.firstOrNull { it.id == target.id } ?: continue
+                val result = updater.update(
+                    SubscriptionUpdateRequest(
+                        subscription = before,
+                        profile = current.profile,
+                        etag = current.etagFor(before.id)
                     )
                 )
-            } finally {
-                refreshAllInFlight.set(false)
+                when (result) {
+                    is SubscriptionUpdateResult.Updated -> {
+                        current = current.withSubscription(result.subscription)
+                            .withEtag(before.id, result.etag)
+                        updated++
+                    }
+                    is SubscriptionUpdateResult.Unchanged -> {
+                        current = current.withSubscription(result.subscription)
+                        unchanged++
+                    }
+                    is SubscriptionUpdateResult.Failed -> {
+                        current = current.withSubscription(result.subscription)
+                        failed++
+                    }
+                    // Another update for this list held the single flight; that one persists itself.
+                    SubscriptionUpdateResult.SkippedInFlight -> skipped++
+                }
             }
+
+            // Written once for the whole sweep, then republished once: a partial settings file between
+            // two sources would describe a state the user never had.
+            runCatching { store.save(current) }
+            if (targets.isNotEmpty()) {
+                runCatching { assembler.assemble(current) }
+            }
+            onFinished(
+                FilterRefreshSummary(
+                    considered = targets.size,
+                    updated = updated,
+                    unchanged = unchanged,
+                    failed = failed,
+                    skipped = skipped
+                )
+            )
+        } finally {
+            refreshAllInFlight.set(false)
         }
     }
 
