@@ -40,6 +40,7 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         return FilterSettings(
             profile = profile,
+            enabled = guarded(false) { prefs.getBoolean(KEY_ENABLED, false) },
             subscriptions = subscriptions.map { it.subscription },
             manualAllow = guarded(emptyList()) { readManualRules(KEY_MANUAL_ALLOW) },
             manualBlock = guarded(emptyList()) { readManualRules(KEY_MANUAL_BLOCK) },
@@ -59,6 +60,7 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         prefs.edit()
             .putString(KEY_PROFILE, settings.profile.id)
+            .putBoolean(KEY_ENABLED, settings.enabled)
             .putStringSet(KEY_SUBSCRIPTIONS, records)
             .putStringSet(KEY_MANUAL_ALLOW, encodeManualRules(settings.manualAllow))
             .putStringSet(KEY_MANUAL_BLOCK, encodeManualRules(settings.manualBlock))
@@ -211,6 +213,7 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
         const val PREFS_NAME = "kuies_block_filter"
 
         private const val KEY_PROFILE = "profile"
+        private const val KEY_ENABLED = "enabled"
         private const val KEY_SUBSCRIPTIONS = "subscriptions"
         private const val KEY_MANUAL_ALLOW = "manual_allow"
         private const val KEY_MANUAL_BLOCK = "manual_block"

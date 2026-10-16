@@ -1140,6 +1140,42 @@ function Invoke-KuiesFilterProbe {
     return $null
 }
 
+function Get-KuiesSystemLookupResult {
+    # 解析 App 用「系統解析器」查詢的結果：systemLookup domain=<d> result=<r> … locallyBlocked<before/after>=<n>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$LogText, [Parameter(Mandatory)][string]$Domain)
+
+    $pattern = 'systemLookup domain=' + [regex]::Escape($Domain) +
+        '\s+result=(\S+)[^\r\n]*locallyBlockedBefore=(\d+)\s+locallyBlockedAfter=(\d+)'
+    $match = [regex]::Match($LogText, $pattern)
+    if (-not $match.Success) { return $null }
+    $before = [int]$match.Groups[2].Value
+    $after = [int]$match.Groups[3].Value
+    return [pscustomobject]@{
+        result        = $match.Groups[1].Value
+        blockedBefore = $before
+        blockedAfter  = $after
+        blockedDelta  = $after - $before
+    }
+}
+
+function Invoke-KuiesSystemLookup {
+    # 由 App 自己呼叫系統解析器。這是唯一能回答「本機規則能不能影響一般 App 解析」的探測：
+    # `adb shell` 的解析不經過 App 的 VPN，而查詢成功／失敗本身無法區分是本機還是上游回答的，
+    # 所以判讀一律看 App 自己的本機封鎖計數變化。
+    param([Parameter(Mandatory)][string]$Domain, [int]$TimeoutSeconds = 25)
+
+    Clear-KuiesLogcat
+    Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.RESOLVE_SYSTEM --es domain $Domain" -AllowFailure | Out-Null
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $text = Save-KuiesLogcat -FileName "logcat-system-lookup-$Domain.txt"
+        $result = Get-KuiesSystemLookupResult -LogText $text -Domain $Domain
+        if ($result) { return $result }
+    }
+    return $null
+}
+
 function Invoke-ScenarioFilter {
     # 本機規則是否真的生效，必須由 App 自己送出的查詢來證明：
     #  * `adb shell` 的解析不經過 App 的 VPN，ping 不能拿來當證據；
@@ -1192,6 +1228,20 @@ function Invoke-ScenarioFilter {
             Add-KuiesNote 'strict 模式下系統 resolver 不使用虛擬 DNS，本機過濾對系統層級查詢不生效；下列 probe 送出的封包是「明確送往虛擬 DNS」，因此仍會進隧道並被本機規則回答。'
         } else {
             Add-KuiesCheck -Name '非 strict 模式：tunnel 宣告攔截用虛擬 DNS' -Passed ([bool]$tunnel.dnsAddresses) -Expected 'DnsAddresses 非空' -Actual "dns='$($tunnel.dnsAddresses)'"
+        }
+
+        # 本輪的核心問題：一般 App 的解析會不會經過本機過濾器。用一個全新的子網域避開 netd 的
+        # 正／負快取（快取命中就不會送出查詢，結果什麼都證明不了），並以「本機封鎖計數」判讀。
+        $systemProbeName = 'sysprobe-{0}.{1}' -f (Get-Random -Minimum 100000 -Maximum 999999), $blockedHost
+        $systemLookup = Invoke-KuiesSystemLookup -Domain $systemProbeName
+        Save-KuiesText -Name 'system-lookup.json' -Content ($systemLookup | ConvertTo-Json -Depth 4) | Out-Null
+        $systemActual = if ($systemLookup) {
+            "result=$($systemLookup.result) locallyBlocked +$($systemLookup.blockedDelta)（$($systemLookup.blockedBefore)→$($systemLookup.blockedAfter)）"
+        } else { '沒有回應' }
+        if ($strict) {
+            Add-KuiesCheck -Name 'strict 模式：系統解析器的查詢沒有進到本機過濾器' -Passed (($null -ne $systemLookup) -and ($systemLookup.blockedDelta -eq 0)) -Expected '本機封鎖計數不變' -Actual $systemActual -Note 'strict 下系統自己去問 DoT，本機規則拿不到查詢，因此不可能生效。'
+        } else {
+            Add-KuiesCheck -Name '非 strict 模式：系統解析器的查詢確實進到本機過濾器' -Passed (($null -ne $systemLookup) -and ($systemLookup.blockedDelta -ge 1)) -Expected '本機封鎖計數 +1' -Actual $systemActual -Note '計數增加才證明是「本機規則」回答了那個查詢；查詢成功或失敗本身無法區分是本機還是上游回答。'
         }
 
         $blockedProbe = Invoke-KuiesFilterProbe -Domain $blockedHost

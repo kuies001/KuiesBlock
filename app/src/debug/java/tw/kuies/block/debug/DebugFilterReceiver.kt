@@ -47,6 +47,12 @@ class DebugFilterReceiver : BroadcastReceiver() {
                 // Off the main thread: a socket wait must never be able to ANR the app.
                 Thread({ probe(intent.getStringExtra(EXTRA_DOMAIN)) }, "kuies-filter-probe").start()
             }
+            ACTION_RESOLVE_SYSTEM -> {
+                Thread(
+                    { resolveThroughSystemResolver(intent.getStringExtra(EXTRA_DOMAIN)) },
+                    "kuies-sysresolve"
+                ).start()
+            }
             ACTION_RESET_COUNTER -> {
                 LocalFilterStats.reset()
                 Log.i(TAG, "probe counter reset")
@@ -129,11 +135,57 @@ class DebugFilterReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * Resolves [domain] with Android's **system** resolver and reports what happened.
+     *
+     * This is the probe that answers the round's real question: whether this app's rules can influence
+     * what an ordinary app resolves. Unlike [probe], which sends a packet straight to the virtual DNS,
+     * this one takes the same path any other app's lookup takes — whatever DNS the default network has
+     * configured — so it works exactly when the system is still handing DNS to the tunnel.
+     *
+     * The caller must use a name that cannot be in the resolver cache (a fresh subdomain), otherwise no
+     * query is sent and the result proves nothing. The resolved addresses are counted, never logged:
+     * the log stays a test artefact, not a record of what any name resolved to.
+     */
+    private fun resolveThroughSystemResolver(domain: String?) {
+        val name = domain?.trim().orEmpty()
+        if (name.isEmpty()) {
+            Log.w(TAG, "resolve needs --es domain")
+            return
+        }
+        val blockedBefore = LocalFilterStats.blocked
+        val startedAt = System.currentTimeMillis()
+        val elapsed = { System.currentTimeMillis() - startedAt }
+        try {
+            val addresses = InetAddress.getAllByName(name)
+            Log.i(
+                TAG,
+                "systemLookup domain=$name result=OK addressCount=${addresses.size} " +
+                    "elapsedMs=${elapsed()} locallyBlockedBefore=$blockedBefore " +
+                    "locallyBlockedAfter=${LocalFilterStats.blocked}"
+            )
+        } catch (unknown: java.net.UnknownHostException) {
+            Log.i(
+                TAG,
+                "systemLookup domain=$name result=UNKNOWN_HOST elapsedMs=${elapsed()} " +
+                    "locallyBlockedBefore=$blockedBefore locallyBlockedAfter=${LocalFilterStats.blocked}"
+            )
+        } catch (error: Exception) {
+            Log.i(
+                TAG,
+                "systemLookup domain=$name result=ERROR(${error.javaClass.simpleName}) " +
+                    "elapsedMs=${elapsed()} locallyBlockedBefore=$blockedBefore " +
+                    "locallyBlockedAfter=${LocalFilterStats.blocked}"
+            )
+        }
+    }
+
     companion object {
         const val TAG = "KuiesFilterProbe"
         const val ACTION_SET_RULES = "tw.kuies.block.debug.SET_FILTER_RULES"
         const val ACTION_CLEAR_RULES = "tw.kuies.block.debug.CLEAR_FILTER_RULES"
         const val ACTION_PROBE = "tw.kuies.block.debug.PROBE_DNS"
+        const val ACTION_RESOLVE_SYSTEM = "tw.kuies.block.debug.RESOLVE_SYSTEM"
         const val ACTION_RESET_COUNTER = "tw.kuies.block.debug.RESET_FILTER_COUNTER"
         const val EXTRA_DOMAINS = "domains"
         const val EXTRA_DOMAIN = "domain"

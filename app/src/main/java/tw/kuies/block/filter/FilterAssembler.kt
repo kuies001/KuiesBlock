@@ -28,6 +28,11 @@ class FilterAssembler(
 ) {
 
     fun assemble(settings: FilterSettings): FilterSnapshot {
+        // The master switch is checked once, here, and it is the *only* place it matters: with the
+        // filter off nothing is published at all, so the packet path falls through to the DoH
+        // transport exactly as it did before this feature existed.
+        if (!settings.enabled) return repository.clear()
+
         val blocked = ArrayList<String>(1024)
         val allowed = ArrayList<String>(64)
 

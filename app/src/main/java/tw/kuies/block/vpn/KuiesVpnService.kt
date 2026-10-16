@@ -66,6 +66,7 @@ import tw.kuies.block.doh.OkHttpDohTransport
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.doh.toProtectionError
+import tw.kuies.block.filter.FilterCoordinatorHolder
 import tw.kuies.block.filter.FilterSnapshotHolder
 import tw.kuies.block.filter.LocalFilterStats
 
@@ -264,6 +265,11 @@ class KuiesVpnService : VpnService() {
             return
         }
         routePlan = plan
+
+        // Publish the local filter's rules before the tunnel can serve a query. The snapshot comes
+        // from stored settings and stored list text only, so it needs no network — and it is posted
+        // to the coordinator's own thread, so this (main) thread never waits for a parse.
+        FilterCoordinatorHolder.get(this).publishCurrentAsync()
 
         // One place only decides the tunnel configuration; nothing else branches on the mode.
         val privateDns = PrivateDnsSettings.read(this)

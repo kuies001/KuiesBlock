@@ -15,6 +15,15 @@ package tw.kuies.block.filter
  */
 data class FilterSettings(
     val profile: FilterProfile = FilterProfile.DEFAULT,
+    /**
+     * Whether the local filter runs at all.
+     *
+     * False until the user picks a strength, so a fresh install blocks nothing and downloads
+     * nothing — the filter can never start working behind the user's back. This is a different
+     * question from [contributesToSnapshot], which only answers "if the filter runs, does this
+     * source's stored content belong in the snapshot?".
+     */
+    val enabled: Boolean = false,
     val subscriptions: List<FilterSubscription> = listOf(
         FilterSubscription.forProfile(FilterProfile.DEFAULT)
     ),
@@ -40,12 +49,24 @@ data class FilterSettings(
      * The new tier's list replaces the old one and its download state starts from scratch: the stored
      * copy on disk belongs to the previous list, so it is not marked ready and its ETag is dropped.
      * Custom subscriptions are unaffected — they are independent sources, not tiers.
+     *
+     * Choosing a tier also switches the filter on: picking a strength is the user's act of turning
+     * it on.
      */
     fun withProfile(profile: FilterProfile): FilterSettings = copy(
         profile = profile,
+        enabled = true,
         subscriptions = listOf(FilterSubscription.forProfile(profile)) + customSubscriptions,
         etags = etags - FilterSubscription.PROFILE_SUBSCRIPTION_ID
     )
+
+    /**
+     * Turns the local filter on or off without touching the tier or the stored content.
+     *
+     * Switching it off publishes no rules; the downloaded lists stay on disk, so switching back on
+     * applies them again without another download.
+     */
+    fun withEnabled(enabled: Boolean): FilterSettings = copy(enabled = enabled)
 
     /**
      * Adds [subscription], or replaces the entry with the same id.
@@ -164,17 +185,18 @@ data class FilterSettings(
         rules.distinctBy { (DomainName.normalise(it.domain) ?: it.domain.trim().lowercase()) to it.scope }
 
     companion object {
-        /** Profile STANDARD, no manual rules, one built-in subscription and nothing downloaded yet. */
+        /** Profile STANDARD, filter **off**, no manual rules, one built-in subscription, nothing downloaded. */
         val DEFAULTS = FilterSettings()
 
         /**
-         * Defaults for a specific tier.
+         * A specific tier, switched on.
          *
          * Always use this (or [withProfile]) rather than `FilterSettings(profile = …)`, which would
-         * keep the default tier's main list.
+         * keep the default tier's main list and leave the filter off.
          */
         fun forProfile(profile: FilterProfile): FilterSettings = FilterSettings(
             profile = profile,
+            enabled = true,
             subscriptions = listOf(FilterSubscription.forProfile(profile))
         )
     }

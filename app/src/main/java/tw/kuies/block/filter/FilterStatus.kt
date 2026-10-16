@@ -24,6 +24,8 @@ data class SubscriptionStatus(
 data class FilterStatus(
     val profile: FilterProfile,
     val profileListName: String,
+    /** Whether the local filter is switched on at all ([FilterSettings.enabled]). */
+    val enabled: Boolean,
     val subscriptions: List<SubscriptionStatus>,
     /** Rules contributed by subscriptions to the published snapshot. */
     val subscriptionRuleCount: Int,
@@ -38,6 +40,7 @@ data class FilterStatus(
         fun of(settings: FilterSettings, snapshot: FilterSnapshot): FilterStatus = FilterStatus(
             profile = settings.profile,
             profileListName = settings.profile.listName,
+            enabled = settings.enabled,
             subscriptions = settings.subscriptions.map { subscription ->
                 SubscriptionStatus(
                     id = subscription.id,
