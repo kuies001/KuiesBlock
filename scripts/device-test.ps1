@@ -1215,8 +1215,30 @@ function Invoke-ScenarioFilter {
         if (-not $tunnelUp) { return }
 
         # 灌入已知規則：example.com 由本機封鎖，dns.kuies.tw 不在規則內（上游照常解析）。
-        Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.SET_FILTER_RULES --es domains $blockedHost" -AllowFailure | Out-Null
-        Start-Sleep -Milliseconds 500
+        # 服務啟動時的 publishCurrentAsync() 是非同步的，可能在注入之後才落地而把注入的規則蓋掉
+        # （2026-10-16 的回歸）。不能用固定延遲掩蓋，改為連續注入兩次並比對 receiver 已記下的
+        # snapshot version：兩次相差 1 代表其間沒有任何其他發布，此時 snapshot 就是注入的那一份。
+        $armed = $false
+        for ($attempt = 1; $attempt -le 4 -and -not $armed; $attempt++) {
+            Clear-KuiesLogcat
+            Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.SET_FILTER_RULES --es domains $blockedHost" -AllowFailure | Out-Null
+            Start-Sleep -Milliseconds 400
+            $firstLog = (Invoke-KuiesShell 'logcat -d -v threadtime -b main -b system -s KuiesFilterProbe' -AllowFailure).Text
+            $firstVersions = @([regex]::Matches($firstLog, 'snapshot version=(\d+)') | ForEach-Object { [int]$_.Groups[1].Value })
+            Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.SET_FILTER_RULES --es domains $blockedHost" -AllowFailure | Out-Null
+            Start-Sleep -Milliseconds 400
+            $secondLog = (Invoke-KuiesShell 'logcat -d -v threadtime -b main -b system -s KuiesFilterProbe' -AllowFailure).Text
+            $secondVersions = @([regex]::Matches($secondLog, 'snapshot version=(\d+)') | ForEach-Object { [int]$_.Groups[1].Value })
+            if ($firstVersions.Count -gt 0 -and $secondVersions.Count -gt 0) {
+                $first = $firstVersions[$firstVersions.Count - 1]
+                $second = $secondVersions[$secondVersions.Count - 1]
+                $armed = ($second -eq $first + 1)
+                Add-KuiesNote "注入規則第 $attempt 次：snapshot version $first → $second（$($(if ($armed) { '其間無其他發布，注入已生效' } else { '其間有其他發布，重試' }))）"
+            } else {
+                Add-KuiesNote "注入規則第 $attempt 次：讀不到 snapshot version（first=$($firstVersions.Count) second=$($secondVersions.Count)）"
+            }
+        }
+        if (-not $armed) { Add-KuiesNote '警告：無法確認注入的 snapshot 未被啟動發布覆蓋，後續命中結果可能不可信' }
         Invoke-KuiesShell "am broadcast -n $AppId/.debug.DebugFilterReceiver -a tw.kuies.block.debug.RESET_FILTER_COUNTER" -AllowFailure | Out-Null
         Start-Sleep -Milliseconds 300
 
