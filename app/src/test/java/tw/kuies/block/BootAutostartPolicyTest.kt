@@ -7,13 +7,15 @@ import org.junit.Test
 import tw.kuies.block.data.ProtectionIntentStore
 import tw.kuies.block.vpn.AlwaysOnVpnProbe
 import tw.kuies.block.vpn.BootAutostartPolicy
+import tw.kuies.block.vpn.OtherVpnState
 
 /**
- * Whether a restart may start protection, and the two facts the decision is made from.
+ * Whether a restart may start protection, and the facts the decision is made from.
  *
  * Every gate is asserted on its own, because the feature's whole safety story is that a wrong "start"
- * cannot happen: the default is off, a deliberate turn-off survives, and nothing is opened or taken
- * from another app.
+ * cannot happen: the default is off, a deliberate turn-off survives, nothing is opened or taken from
+ * another app — and, since this round, a slot the platform will not let us inspect is treated as
+ * occupied rather than as free.
  */
 class BootAutostartPolicyTest {
 
@@ -24,14 +26,14 @@ class BootAutostartPolicyTest {
         userWantsProtection: Boolean = true,
         serviceRunning: Boolean = false,
         alwaysOnVpn: Boolean = false,
-        otherVpnActive: Boolean = false
+        otherVpn: OtherVpnState = OtherVpnState.ABSENT
     ): BootAutostartPolicy.Decision = BootAutostartPolicy.decide(
         preferenceEnabled = preferenceEnabled,
         authorizationGranted = authorizationGranted,
         userWantsProtection = userWantsProtection,
         serviceRunning = serviceRunning,
         alwaysOnVpn = alwaysOnVpn,
-        otherVpnActive = otherVpnActive
+        otherVpn = otherVpn
     )
 
     @Test
@@ -80,7 +82,17 @@ class BootAutostartPolicyTest {
 
     @Test
     fun `another VPN holding the slot is respected`() {
-        assertEquals(BootAutostartPolicy.Decision.SKIP_OTHER_VPN, decide(otherVpnActive = true))
+        assertEquals(BootAutostartPolicy.Decision.SKIP_OTHER_VPN, decide(otherVpn = OtherVpnState.PRESENT))
+    }
+
+    @Test
+    fun `a slot the platform will not let us inspect is treated as occupied`() {
+        // The defect this round fixed: UNKNOWN used to arrive here as "no other VPN" and the boot would
+        // proceed to take a slot it could not prove was free.
+        assertEquals(
+            BootAutostartPolicy.Decision.SKIP_OTHER_VPN_UNKNOWN,
+            decide(otherVpn = OtherVpnState.UNKNOWN)
+        )
     }
 
     @Test

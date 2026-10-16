@@ -29,7 +29,16 @@ object BootAutostartPolicy {
         SKIP_NOT_AUTHORIZED,
 
         /** Another VPN holds the single VPN slot; KuiesBlock never takes it away. */
-        SKIP_OTHER_VPN
+        SKIP_OTHER_VPN,
+
+        /**
+         * The platform would not say whether another VPN holds the slot.
+         *
+         * A separate decision from [SKIP_OTHER_VPN] so a skip can be explained afterwards, but the same
+         * outcome on purpose: "could not tell" is not "there is none", and starting on that basis could
+         * take a slot this app was never able to prove was free.
+         */
+        SKIP_OTHER_VPN_UNKNOWN
     }
 
     fun decide(
@@ -38,14 +47,15 @@ object BootAutostartPolicy {
         userWantsProtection: Boolean,
         serviceRunning: Boolean,
         alwaysOnVpn: Boolean,
-        otherVpnActive: Boolean
+        otherVpn: OtherVpnState
     ): Decision = when {
         !preferenceEnabled -> Decision.SKIP_NOT_ENABLED
         !userWantsProtection -> Decision.SKIP_USER_TURNED_IT_OFF
         alwaysOnVpn -> Decision.SKIP_ALWAYS_ON
         serviceRunning -> Decision.SKIP_ALREADY_RUNNING
         !authorizationGranted -> Decision.SKIP_NOT_AUTHORIZED
-        otherVpnActive -> Decision.SKIP_OTHER_VPN
+        otherVpn == OtherVpnState.PRESENT -> Decision.SKIP_OTHER_VPN
+        otherVpn == OtherVpnState.UNKNOWN -> Decision.SKIP_OTHER_VPN_UNKNOWN
         else -> Decision.START
     }
 }

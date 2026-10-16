@@ -35,10 +35,15 @@ class BootProtectionReceiver : BroadcastReceiver() {
                     appContext.packageName,
                     AlwaysOnVpnProbe.readConfiguredApp(appContext)
                 ),
-                otherVpnActive = OtherVpnProbe.anotherVpnHoldsTheSlot(appContext, KuiesVpnService.isRunning)
+                otherVpn = OtherVpnProbe.state(appContext, KuiesVpnService.isRunning)
             )
             if (decision == BootAutostartPolicy.Decision.START) {
                 KuiesVpnService.start(appContext)
+            } else if (store.bootAutostartEnabled()) {
+                // One category-only line, and only for a user who asked for this: a boot that did
+                // nothing has to be explainable afterwards, and the reason is a decision name — never an
+                // owner, an address or anything about the user's network.
+                Log.i(TAG, "Boot autostart skipped: ${decision.name}")
             }
         } catch (exception: Exception) {
             // A receiver that throws would take the app process down at boot; a skipped start is
