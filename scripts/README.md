@@ -52,7 +52,7 @@ adb -s <USB 序號> install -r app\build\outputs\apk\debug\app-debug.apk
 | `-StopOtherVpn` | 測試前停用佔用 VPN 位置的其他 App（預設 `com.adguard.android`），結束後嘗試還原 |
 | `-FullLogcat` | 收集完整 logcat（預設只抓 App 相關 tag） |
 | `-TimeoutSeconds` | 單一步驟的等待上限，預設 45 |
-| `-DnsProbeHosts` | 解析檢查用的主機，預設 `example.com`、`dns.kuies.tw` |
+| `-DnsProbeHosts` | 解析檢查用的主機，預設 `example.com` 與 DoH 上游主機名稱 |
 
 ## 產出
 

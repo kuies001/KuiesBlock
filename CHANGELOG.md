@@ -83,7 +83,7 @@
 ### 私人 DNS 相容性（BUG 3 分析與引導）
 
 - **Android 私人 DNS 與 KuiesBlock 的互動**：
-  - Android 啟用私人 DNS（指定主機名稱 `dns.kuies.tw`）時，系統解析器會透過 DoT（TCP 853）對外連線。KuiesBlock 僅攔截虛擬 DNS 位址（`10.111.222.2/32`），若系統或應用程式產生 TCP 查詢或探測，KuiesBlock 的 UDP-only 解析器會記錄 `NOT_UDP` 並安全丟棄。
+  - Android 啟用私人 DNS（指定主機名稱）時，系統解析器會透過 DoT（TCP 853）對外連線。KuiesBlock 僅攔截虛擬 DNS 位址（`10.111.222.2/32`），若系統或應用程式產生 TCP 查詢或探測，KuiesBlock 的 UDP-only 解析器會記錄 `NOT_UDP` 並安全丟棄。
   - 當系統或 App 產生 IPv6 查詢或探測時，`Ipv4Parser` 記錄 `NOT_IPV4` 並安全丟棄。
   - `::/0 unreachable` 為 Android 檢測 VPN 網路介面是否具備 IPv6 預設路由時的正常回報；KuiesBlock 僅接管指定 IPv4 /32 DNS 路由，底層實體網路（Wi-Fi 或行動網路）的 IPv6 與一般連線完全正常不受影響。
   - AdGuard Home 阻擋廣告時（回傳 `NXDOMAIN` 或 `0.0.0.0`），KuiesBlock 解析為合法的 DNS 回應（`isBlocked=true` 為 AdGuard Home 特性），不會誤判為網路異常或觸發 fail-open。
@@ -125,7 +125,7 @@
 - **Android 私人 DNS 狀態誤判（根因）**：DNS 診斷原本以**系統解析器**（`InetAddress.getAllByName`，探測時的
   `InetSocketAddress(host, port)` 亦然）解析 DoH 主機名稱。但這正是 Android「私人 DNS → 指定主機名稱」會**接管**
   的解析路徑，而 KuiesBlock 自己的 DoH 路徑從不使用系統解析器（它以受保護的 UDP 直接詢問底層網路的 DNS）。
-  因此當私人 DNS 設為 `dns.kuies.tw` 而其 DoT 通道在該網路無法建立時，診斷會得到 `UnknownHostException`，
+  因此當私人 DNS 設為指定主機名稱、而其 DoT 通道在該網路無法建立時，診斷會得到 `UnknownHostException`，
   並把「Android 的私人 DNS 路徑失效」誤報成「KuiesBlock 連線異常」。
   - 診斷改為使用與 DoH client 相同的路徑：`UnderlyingNetworkFinder` 取得底層網路 DNS → `PlainDnsBootstrap`
     解析 → 以解析出的位址連線，但仍設定 SNI 與 `endpointIdentificationAlgorithm = "HTTPS"`，
@@ -172,7 +172,7 @@
 
 ## v0.2.0
 
-**主題：DNS-only VPN 核心 —— 真正透過本機 VPN 將系統 DNS 查詢加密送往 dns.kuies.tw**
+**主題：DNS-only VPN 核心 —— 真正透過本機 VPN 將系統 DNS 查詢加密送往自架 DoH 解析服務**
 
 ### 新增
 
