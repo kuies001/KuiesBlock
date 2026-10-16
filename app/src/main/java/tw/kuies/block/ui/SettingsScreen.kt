@@ -48,8 +48,10 @@ fun SettingsScreen(
     appVersion: String,
     filterStatus: FilterStatus?,
     filterBusy: Boolean,
+    filterUpdating: Boolean,
     privateDnsMode: PrivateDnsMode,
     onSelectStrength: (FilterProfile?) -> Unit,
+    onUpdateFilterNow: () -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -69,6 +71,11 @@ fun SettingsScreen(
             privateDnsMode = privateDnsMode,
             onSelectStrength = onSelectStrength
         )
+        FilterSourceSection(
+            status = filterStatus,
+            updating = filterUpdating,
+            onUpdateNow = onUpdateFilterNow
+        )
         DiagnosticsSection(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
@@ -76,6 +83,70 @@ fun SettingsScreen(
         )
         PrivacySection()
         AboutSection(appVersion = appVersion)
+    }
+}
+
+/**
+ * The filter source the engine is actually using, and the one action that changes it.
+ *
+ * Every value comes from [FilterPresentation], so this screen cannot show a rule count that is not in
+ * effect, nor call a failed update a success. There is deliberately no custom-subscription editor
+ * yet: only the three built-in tiers are managed here, and a half-finished editor would promise
+ * management the app cannot honour.
+ */
+@Composable
+private fun FilterSourceSection(
+    status: FilterStatus?,
+    updating: Boolean,
+    onUpdateNow: () -> Unit
+) {
+    SectionCard(title = stringResource(R.string.settings_filter_sources_section)) {
+        if (status == null) {
+            Text(
+                text = stringResource(R.string.filter_state_label_loading),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            return@SectionCard
+        }
+        Text(
+            text = FilterPresentation.mainListName(status),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "維護者：${FilterPresentation.MAINTAINER}・${FilterPresentation.MAINTAINER_HOME}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = FilterPresentation.LICENCE,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        LabeledValue(
+            label = stringResource(R.string.filter_source_enabled),
+            value = FilterPresentation.sourceEnabledLabel(status.enabled)
+        )
+        LabeledValue(
+            label = stringResource(R.string.filter_source_rules),
+            value = FilterPresentation.effectiveRulesLabel(status)
+        )
+        LabeledValue(
+            label = stringResource(R.string.filter_source_last_update),
+            value = FilterPresentation.updateResultLabel(status, System.currentTimeMillis())
+        )
+        Button(
+            onClick = onUpdateNow,
+            enabled = !updating,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(
+                    if (updating) R.string.filter_source_updating else R.string.filter_source_update_now
+                )
+            )
+        }
     }
 }
 

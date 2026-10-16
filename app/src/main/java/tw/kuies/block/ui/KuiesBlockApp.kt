@@ -71,6 +71,10 @@ fun KuiesBlockApp(
     var filterStatus by remember { mutableStateOf<FilterStatus?>(null) }
     var filterBusy by remember { mutableStateOf(false) }
 
+    // A manual update is separate from choosing a strength: it re-downloads the list that is already
+    // in use, so the two must not share one flag and make the screen describe the wrong action.
+    var filterUpdating by remember { mutableStateOf(false) }
+
     // Private DNS mode as state, not a value read during composition: only a state write can
     // recompose, so reading it at the call site left the strength section describing a mode the user
     // had already changed outside the app.
@@ -173,6 +177,23 @@ fun KuiesBlockApp(
         )
     }
 
+    /**
+     * Re-downloads the list that is already in use, on the user's explicit request.
+     *
+     * A failure keeps the previous list and reports itself through the status, and nothing here can
+     * leave the device without DNS: the download never runs on the tunnel's packet path.
+     */
+    fun updateFilterNow() {
+        if (filterUpdating) return
+        filterUpdating = true
+        FilterCoordinatorHolder.get(appContext).refresh { status ->
+            mainHandler.post {
+                filterStatus = status
+                filterUpdating = false
+            }
+        }
+    }
+
     fun onToggleProtection() {
         when (ProtectionStatusHolder.state) {
             ProtectionState.ACTIVE, ProtectionState.STARTING -> {
@@ -244,8 +265,10 @@ fun KuiesBlockApp(
             appVersion = appVersion,
             filterStatus = filterStatus,
             filterBusy = filterBusy,
+            filterUpdating = filterUpdating,
             privateDnsMode = privateDnsMode,
             onSelectStrength = { profile -> selectFilterStrength(profile) },
+            onUpdateFilterNow = { updateFilterNow() },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier

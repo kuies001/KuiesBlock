@@ -47,4 +47,10 @@
     <string name="settings_filter_body">本機規則只對經過 KuiesBlock 的 DNS 查詢生效。所選清單由裝置自行下載，App 不內建清單內容。</string>
     <string name="filter_state_label">目前狀態</string>
     <string name="filter_state_label_loading">讀取中…</string>
+    <string name="settings_filter_sources_section">過濾器管理</string>
+    <string name="filter_source_enabled">狀態</string>
+    <string name="filter_source_rules">生效規則</string>
+    <string name="filter_source_last_update">最近一次更新</string>
+    <string name="filter_source_update_now">立即更新</string>
+    <string name="filter_source_updating">更新中…</string>
 </resources>

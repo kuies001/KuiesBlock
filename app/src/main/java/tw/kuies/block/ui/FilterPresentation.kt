@@ -1,6 +1,7 @@
 package tw.kuies.block.ui
 
 import tw.kuies.block.dns.PrivateDnsMode
+import tw.kuies.block.filter.BuiltInFilterAttribution
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
@@ -69,4 +70,75 @@ object FilterPresentation {
         status.subscriptions
             .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
             ?.state == SubscriptionState.FAILED
+
+    /** Who maintains the built-in lists. The app ships URLs and attribution only, never the lists. */
+    const val MAINTAINER = "HaGeZi"
+
+    /** The maintainer's project page, for the attribution the GPL-3.0 lists require. */
+    const val MAINTAINER_HOME = BuiltInFilterAttribution.HOME_PAGE
+
+    /** The licence, and the fact that follows from it: the content is fetched on the device. */
+    const val LICENCE = "清單授權：GNU GPL-3.0（App 不內建清單內容，於裝置端下載）"
+
+    /** The active tier's main list, as the filter-management section must name it. */
+    fun mainListName(status: FilterStatus): String = status.profileListName
+
+    fun sourceEnabledLabel(enabled: Boolean): String = if (enabled) "已啟用" else "已停用"
+
+    /**
+     * How many rules the engine can match right now.
+     *
+     * Reports the published snapshot, never what a list merely contains: a source whose rules are
+     * not in effect must not read as though they were.
+     */
+    fun effectiveRulesLabel(status: FilterStatus): String =
+        if (status.effectiveRuleCount > 0) {
+            "目前生效規則：${status.effectiveRuleCount} 條"
+        } else {
+            "目前沒有生效中的規則"
+        }
+
+    /**
+     * When the active list last updated successfully, relative to [now].
+     *
+     * Relative on purpose: an absolute timestamp would need a locale and a time zone, while what the
+     * user needs to know is only whether the list is current.
+     */
+    fun lastSuccessLabel(lastSuccessAtMillis: Long?, now: Long): String {
+        val at = lastSuccessAtMillis ?: return "從未成功更新"
+        val elapsed = now - at
+        if (elapsed < 0) return "剛剛"
+        val minutes = elapsed / 60_000
+        return when {
+            minutes < 1 -> "剛剛"
+            minutes < 60 -> "$minutes 分鐘前"
+            minutes < 60 * 24 -> "${minutes / 60} 小時前"
+            else -> "${minutes / (60 * 24)} 天前"
+        }
+    }
+
+    /**
+     * The outcome of the most recent attempt for the active tier's list.
+     *
+     * A failure always says the previous list is still in use, because that is what the updater
+     * guarantees and a user must never read a failed update as "no protection".
+     */
+    fun updateResultLabel(status: FilterStatus, now: Long): String {
+        val main = status.subscriptions
+            .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
+            ?: return "尚未設定主要清單。"
+        return when (main.state) {
+            SubscriptionState.NOT_READY -> "尚未下載清單。"
+            SubscriptionState.DISABLED -> "此清單已停用。"
+            // A ready list normally has a timestamp; without one, saying "success" alone is still
+            // true, while interpolating the "never" label would contradict itself.
+            SubscriptionState.READY -> main.lastSuccessAtMillis
+                ?.let { "上次更新成功（${lastSuccessLabel(it, now)}）。" }
+                ?: "上次更新成功。"
+            SubscriptionState.FAILED ->
+                "上次更新失敗" +
+                    (main.lastError?.let { "（$it）" } ?: "") +
+                    "；仍使用上一次成功的清單。"
+        }
+    }
 }
