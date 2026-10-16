@@ -108,3 +108,33 @@ data class FilterUpdateRecord(
     val checkedAtMillis: Long? = null,
     val outcome: UpdateCheckOutcome = UpdateCheckOutcome.Never
 )
+
+/**
+ * Which sources one automatic sweep is allowed to touch.
+ *
+ * Pure, so every case that matters can be unit tested without Android. The rule has to answer five
+ * questions at once, and the ordering below is what keeps them from contradicting each other:
+ *  * an already-downloaded list is kept current (the ordinary case);
+ *  * a source the **user added** gets its content even when the first attempt failed or never
+ *    finished, so a failed first download can never strand it until a manual update;
+ *  * an attempt that **failed** is retried — that is recovery, not a download nobody asked for;
+ *  * a source with no stored content **and no attempt behind it** is left alone, which is exactly what
+ *    keeps a fresh install from downloading anything before the user picks a strength.
+ *
+ * Disabled sources are never touched, whatever else is true of them.
+ */
+object FilterAutoUpdateSelection {
+
+    fun shouldRefresh(subscription: FilterSubscription): Boolean =
+        subscription.enabled && when {
+            subscription.ruleCount > 0 -> true
+            subscription.origin == SubscriptionOrigin.USER -> true
+            subscription.state == SubscriptionState.FAILED -> true
+            else -> false
+        }
+
+    /** The sources of [settings] a sweep may touch, in configuration order. */
+    fun select(settings: FilterSettings): List<FilterSubscription> =
+        settings.subscriptions.filter(::shouldRefresh)
+}
+

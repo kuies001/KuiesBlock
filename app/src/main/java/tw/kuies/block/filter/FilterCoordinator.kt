@@ -134,7 +134,7 @@ class FilterCoordinator(
                     return@execute
                 }
 
-                val targets = settings.subscriptions.filter { it.enabled && it.ruleCount > 0 }
+                val targets = FilterAutoUpdateSelection.select(settings)
                 var current = settings
                 var updated = 0
                 var unchanged = 0
