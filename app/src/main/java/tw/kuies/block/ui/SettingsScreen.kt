@@ -1,6 +1,7 @@
 package tw.kuies.block.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -16,6 +17,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,6 +29,9 @@ import tw.kuies.block.R
 import tw.kuies.block.dns.DnsCheckStatus
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsResolutionState
+import tw.kuies.block.dns.PrivateDnsMode
+import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterStatus
 
 /**
  * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
@@ -41,6 +46,10 @@ fun SettingsScreen(
     dnsReport: DnsDiagnosticReport,
     dnsChecking: Boolean,
     appVersion: String,
+    filterStatus: FilterStatus?,
+    filterBusy: Boolean,
+    privateDnsMode: PrivateDnsMode,
+    onSelectStrength: (FilterProfile?) -> Unit,
     onRunDnsDiagnostics: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -54,6 +63,12 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         SettingsHeader(onBack = onBack)
+        InterceptionStrengthSection(
+            status = filterStatus,
+            busy = filterBusy,
+            privateDnsMode = privateDnsMode,
+            onSelectStrength = onSelectStrength
+        )
         DiagnosticsSection(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
@@ -61,6 +76,84 @@ fun SettingsScreen(
         )
         PrivacySection()
         AboutSection(appVersion = appVersion)
+    }
+}
+
+/**
+ * The interception strength, plus the state that decides whether it is really doing anything.
+ *
+ * 「關閉」 is a real option, not an empty one: it is what a fresh install has, and choosing it keeps
+ * the downloaded lists on disk. The state line is derived by [FilterPresentation], which cannot say
+ * 「生效中」 while the system Private DNS owns name resolution.
+ */
+@Composable
+private fun InterceptionStrengthSection(
+    status: FilterStatus?,
+    busy: Boolean,
+    privateDnsMode: PrivateDnsMode,
+    onSelectStrength: (FilterProfile?) -> Unit
+) {
+    SectionCard(title = stringResource(R.string.settings_filter_section)) {
+        Text(
+            text = stringResource(R.string.settings_filter_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        StrengthOption(
+            profile = null,
+            selected = status != null && !status.enabled,
+            enabled = !busy,
+            onSelectStrength = onSelectStrength
+        )
+        FilterProfile.entries.forEach { profile ->
+            StrengthOption(
+                profile = profile,
+                // Until the settings have loaded, nothing is marked as the current choice.
+                selected = status != null && status.enabled && status.profile == profile,
+                enabled = !busy,
+                onSelectStrength = onSelectStrength
+            )
+        }
+        LabeledValue(
+            label = stringResource(R.string.filter_state_label),
+            value = status?.let { FilterPresentation.stateLabel(it, privateDnsMode, busy) }
+                ?: stringResource(R.string.filter_state_label_loading)
+        )
+    }
+}
+
+/** One row of the strength list; a radio row rather than a chip, which cannot overflow at 320dp. */
+@Composable
+private fun StrengthOption(
+    profile: FilterProfile?,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelectStrength: (FilterProfile?) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { onSelectStrength(profile) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = { onSelectStrength(profile) },
+            enabled = enabled
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = FilterPresentation.strengthLabel(profile),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = FilterPresentation.strengthDetail(profile),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

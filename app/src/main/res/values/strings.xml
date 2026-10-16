@@ -43,4 +43,8 @@
     <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。</string>
     <string name="settings_about_section">關於</string>
     <string name="settings_about_version">App 版本</string>
+    <string name="settings_filter_section">廣告攔截強度</string>
+    <string name="settings_filter_body">本機規則只對經過 KuiesBlock 的 DNS 查詢生效。所選清單由裝置自行下載，App 不內建清單內容。</string>
+    <string name="filter_state_label">目前狀態</string>
+    <string name="filter_state_label_loading">讀取中…</string>
 </resources>

@@ -30,8 +30,12 @@ import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.dns.DnsConfigStore
 import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsDiagnostics
+import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.doh.PlainDnsBootstrap
 import tw.kuies.block.doh.VpnSocketProtector
+import tw.kuies.block.filter.FilterCoordinatorHolder
+import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.UnderlyingNetworkFinder
 import tw.kuies.block.vpn.VpnAuthorization
@@ -62,8 +66,24 @@ fun KuiesBlockApp(
     var dnsReport by remember { mutableStateOf(DnsDiagnosticReport.notChecked(dnsConfig.host, dnsConfig.protocol)) }
     var dnsChecking by remember { mutableStateOf(false) }
 
+    // Null until the coordinator has read the stored settings, so the strength list marks no choice
+    // rather than guessing one.
+    var filterStatus by remember { mutableStateOf<FilterStatus?>(null) }
+    var filterBusy by remember { mutableStateOf(false) }
+
+    // Private DNS mode as state, not a value read during composition: only a state write can
+    // recompose, so reading it at the call site left the strength section describing a mode the user
+    // had already changed outside the app.
+    var privateDnsMode by remember { mutableStateOf(PrivateDnsSettings.read(appContext).mode) }
+
     DisposableEffect(Unit) {
         DnsStatsRepository.attach(appContext)
+        // Publish what is already stored — no network — so the settings screen shows the real state
+        // the first time it is opened, and so a filter that was switched on earlier is in effect
+        // without waiting for the tunnel.
+        FilterCoordinatorHolder.get(appContext).publishCurrentAsync { status ->
+            mainHandler.post { filterStatus = status }
+        }
         onDispose { executor.shutdownNow() }
     }
 
@@ -103,6 +123,9 @@ fun KuiesBlockApp(
         val granted = VpnAuthorization.isGranted(appContext)
         settingsStore.setVpnAuthorizationGranted(granted)
         DnsStatsRepository.refresh()
+        // Re-read on every resume: the strength section must never describe a Private DNS mode the
+        // user has already changed in Android's settings and come back from.
+        privateDnsMode = PrivateDnsSettings.read(appContext).mode
         when {
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
             ProtectionStatusHolder.state == ProtectionState.NOT_AUTHORIZED ->
@@ -132,6 +155,22 @@ fun KuiesBlockApp(
                 dnsChecking = false
             }
         }
+    }
+
+    /**
+     * Applies a strength choice (`null` switches the filter off).
+     *
+     * The coordinator calls back twice: immediately with the state that needs no network, then once
+     * the download settled. Only the second callback clears the busy flag, so the screen cannot claim
+     * the download finished while it is still running.
+     */
+    fun selectFilterStrength(profile: FilterProfile?) {
+        filterBusy = profile != null
+        FilterCoordinatorHolder.get(appContext).selectStrength(
+            profile = profile,
+            onStatus = { status -> mainHandler.post { filterStatus = status } },
+            onFinished = { mainHandler.post { filterBusy = false } }
+        )
     }
 
     fun onToggleProtection() {
@@ -203,6 +242,10 @@ fun KuiesBlockApp(
             dnsReport = dnsReport,
             dnsChecking = dnsChecking,
             appVersion = appVersion,
+            filterStatus = filterStatus,
+            filterBusy = filterBusy,
+            privateDnsMode = privateDnsMode,
+            onSelectStrength = { profile -> selectFilterStrength(profile) },
             onRunDnsDiagnostics = { runDnsDiagnostics() },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier
