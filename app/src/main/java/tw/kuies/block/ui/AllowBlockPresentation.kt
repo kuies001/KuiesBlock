@@ -1,5 +1,6 @@
 package tw.kuies.block.ui
 
+import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.ManualRuleDraft
 import tw.kuies.block.filter.MatchScope
 
@@ -98,4 +99,14 @@ object AllowBlockPresentation {
             "請只輸入網域，不要包含 https://、路徑、通訊埠或查詢字串。"
         ManualRuleDraft.Rejection.DUPLICATE -> "這個網域已經在清單中。"
     }
+
+    /**
+     * The confirmation shown right after a rule was added.
+     *
+     * It repeats the domain and the scope that were stored, because the row itself can sit below the
+     * fold: the user should not have to scroll to find out whether the add worked, and the two scopes
+     * look different on purpose.
+     */
+    fun addedMessage(rule: ManualRule): String =
+        "已新增：${rule.domain}（${scopeLabel(rule.scope)}）"
 }

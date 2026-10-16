@@ -22,6 +22,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.filter.ManualRule
@@ -57,10 +59,15 @@ fun AllowBlockSection(
     var draft by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    var added by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
 
     val rules = if (blocking) block else allow
     val scope = if (exactScope) MatchScope.EXACT else MatchScope.SUBDOMAIN
 
+    // One path for the button and for the IME's Done action, so both behave identically.
     val add: () -> Unit = {
         when (val result = ManualRuleDraft.parse(draft, scope, rules)) {
             is ManualRuleDraft.Result.Accepted -> {
@@ -69,10 +76,20 @@ fun AllowBlockSection(
                 // A search that hid the new rule would look like the add had silently failed.
                 query = ""
                 error = null
+                // The new row can sit below the fold, so confirm it here and hand the screen its
+                // height back: a keyboard left open over the list is what made the rule seem to
+                // vanish. [addedMessage] names the domain and the scope that were stored.
+                added = AllowBlockPresentation.addedMessage(result.rule)
+                focusManager.clearFocus()
+                keyboard?.hide()
             }
 
-            is ManualRuleDraft.Result.Rejected ->
+            is ManualRuleDraft.Result.Rejected -> {
+                // A refusal leaves the draft, the focus and the cursor where they were, so the user
+                // only has to fix the one thing the message names.
                 error = AllowBlockPresentation.rejectionMessage(result.reason)
+                added = null
+            }
         }
     }
 
@@ -99,6 +116,7 @@ fun AllowBlockSection(
                     onClick = {
                         blocking = false
                         error = null
+                        added = null
                     },
                     label = { Text(AllowBlockPresentation.TAB_ALLOW) }
                 )
@@ -107,6 +125,7 @@ fun AllowBlockSection(
                     onClick = {
                         blocking = true
                         error = null
+                        added = null
                     },
                     label = { Text(AllowBlockPresentation.TAB_BLOCK) }
                 )
@@ -125,12 +144,25 @@ fun AllowBlockSection(
                 onValueChange = {
                     draft = it
                     error = null
+                    // Typing again makes the previous confirmation stale.
+                    added = null
                 },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 isError = error != null,
                 label = { Text(AllowBlockPresentation.DOMAIN_FIELD_LABEL) },
                 placeholder = { Text(AllowBlockPresentation.DOMAIN_PLACEHOLDER) },
+                // The confirmation sits with the field that produced it, so it is visible even when
+                // the list itself is below the fold. Errors keep the row below, in the error colour.
+                supportingText = {
+                    added?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { add() })
             )
