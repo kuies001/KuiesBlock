@@ -93,6 +93,43 @@ class FilterCoordinator(
     }
 
     /**
+     * Adds a manual allow rule and republishes straight away.
+     *
+     * A manual rule needs no network, so the snapshot is replaced immediately and a running tunnel
+     * picks it up on its next query — the user never restarts protection to make a rule count.
+     */
+    fun addManualAllow(rule: ManualRule, onResult: (FilterStatus) -> Unit = {}) =
+        mutateSettings(onResult) { it.addManualAllow(rule) }
+
+    fun addManualBlock(rule: ManualRule, onResult: (FilterStatus) -> Unit = {}) =
+        mutateSettings(onResult) { it.addManualBlock(rule) }
+
+    /** Removes a manual allow rule by its domain; [FilterSettings] matches it canonically. */
+    fun removeManualAllow(domain: String, onResult: (FilterStatus) -> Unit = {}) =
+        mutateSettings(onResult) { it.removeManualAllow(domain) }
+
+    fun removeManualBlock(domain: String, onResult: (FilterStatus) -> Unit = {}) =
+        mutateSettings(onResult) { it.removeManualBlock(domain) }
+
+    /**
+     * Applies a local-only change to the stored settings, republishes, and reports the new status.
+     *
+     * Everything here runs on [dispatcher], never on the caller's thread: the settings write and the
+     * snapshot rebuild both touch disk, and the packet path must never wait for either.
+     */
+    private fun mutateSettings(
+        onResult: (FilterStatus) -> Unit,
+        change: (FilterSettings) -> FilterSettings
+    ) {
+        dispatcher.execute {
+            val current = runCatching { store.load() }.getOrNull() ?: return@execute
+            val updated = change(current)
+            runCatching { store.save(updated) }
+            onResult(FilterStatus.of(updated, assembler.assemble(updated)))
+        }
+    }
+
+    /**
      * One update attempt for the active tier's list, with the result persisted.
      *
      * The bookkeeping the attempt produced is written back in every branch — a failure has to survive
