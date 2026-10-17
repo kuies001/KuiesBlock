@@ -7,13 +7,14 @@
 KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的 `VpnService` 建立一個**只攔截 DNS** 的本機 VPN：
 查詢先由裝置上的本機規則判斷（可選寬鬆／標準／嚴格／自訂四種模式），未被攔截的查詢再以加密的
 **DNS over HTTPS（DoH）** 送往自架的 AdGuard Home，由伺服器端補上廣告與追蹤網域規則。
+也可以選擇哪些 App 完全略過 KuiesBlock VPN。
 
 - 語言：Kotlin
 - UI：Jetpack Compose + Material 3
 - 最低版本：Android 9（API 28）
 - 目標／編譯版本：API 37
 - 套件名稱：`tw.kuies.block`
-- 版本：**v0.4.2**
+- 版本：**v0.4.3**
 - 發布方式：GitHub 直接提供 APK（不上架 Google Play）
 - 免費、無廣告、無訂閱、無帳號、無追蹤 SDK
 
@@ -41,6 +42,20 @@ KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的
 
 ## 目前狀態
 
+**v0.4.3 的新功能已在一台實機驗證：**
+
+- 設定頁的「個別 App 防護」入口、管理頁、搜尋、App 圖示／名稱／Package Name、開關、
+  已排除數量與「全部恢復防護」確認流程都可正常操作。
+- 排除 Spotify 後，VPN UID 集合由 `0-99999, 9500000-9599999` 變成
+  `0-10338, 10340-20338, 20340-99999`；UID `10339` 消失，VPN 仍 `VALIDATED`。
+- 恢復 Spotify 後 UID `10339` 回到覆蓋範圍；程序重啟後排除設定仍保留。
+- VPN 明確停止時切換 App 只儲存設定、不自行啟動 VPN；下次啟動防護時套用排除。
+- 「全部恢復防護」清空排除設定並恢復 UID 覆蓋。
+
+以下邊界仍為 `INCONCLUSIVE`：平台拒絕 `establish()` 的完整回退、PackageManager 查詢失敗的
+UI、快速連續切換的 250 ms debounce、真正重新開機後的保留，以及第三方 App 自身 DNS 流量。
+主工作樹的四項未提交逐 App 實驗不受本版影響。
+
 **v0.4.2 的新功能已在一台實機驗證：**
 
 - 四種廣告攔截模式與八個預設來源可在設定頁讀取；NORMAL、AdGuard、OISD、TIF、NSFW 五個來源
@@ -67,7 +82,7 @@ BASELINE 宣告、Wi-Fi → 行動網路 → Wi-Fi 交接（390 → 373 → 393�
 本機建置與單元測試：
 
 - `:app:assembleDebug`、`:app:assembleRelease`（含 R8 與 lintVital）皆成功
-- `:app:testDebugUnitTest`：603 個測試（69 個測試類別）、0 失敗、1 略過
+- `:app:testDebugUnitTest`：606 個測試（70 個測試類別）、0 失敗、1 略過
 
 **只有上述一台裝置完成驗收。** 其他 Android 版本與機型尚未逐一驗證；私人 DNS「自動」模式是否真的
 使用 DoT 無法由平台觀測，該子項維持無法判定（不視為通過）。
