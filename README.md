@@ -5,7 +5,7 @@
 **[⬇ 下載最新版本 APK](https://github.com/kuies001/KuiesBlock/releases/latest)**
 
 KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的 `VpnService` 建立一個**只攔截 DNS** 的本機 VPN：
-查詢先由裝置上的本機規則判斷（可選寬鬆／標準／嚴格三級清單），未被攔截的查詢再以加密的
+查詢先由裝置上的本機規則判斷（可選寬鬆／標準／嚴格／自訂四種模式），未被攔截的查詢再以加密的
 **DNS over HTTPS（DoH）** 送往自架的 AdGuard Home，由伺服器端補上廣告與追蹤網域規則。
 
 - 語言：Kotlin
@@ -13,7 +13,7 @@ KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的
 - 最低版本：Android 9（API 28）
 - 目標／編譯版本：API 37
 - 套件名稱：`tw.kuies.block`
-- 版本：**v0.4.0**
+- 版本：**v0.4.2**
 - 發布方式：GitHub 直接提供 APK（不上架 Google Play）
 - 免費、無廣告、無訂閱、無帳號、無追蹤 SDK
 
@@ -41,7 +41,16 @@ KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的
 
 ## 目前狀態
 
-**v0.4.0 的新功能已在一台實機逐項驗證**（Samsung Android 裝置 / Android 16，以 USB + adb 自動化執行）：
+**v0.4.2 的新功能已在一台實機驗證：**
+
+- 四種廣告攔截模式與八個預設來源可在設定頁讀取；NORMAL、AdGuard、OISD、TIF、NSFW 五個來源
+  實際下載成功。
+- 多來源自訂組合顯示 583,572 條生效規則，「立即更新」成功。
+- 標準模式的 filter 情境 PASS 9/0，本機封鎖計數確實增加。
+- 舊版「已啟用自訂訂閱」的升級遷移、多來源自動背景更新，以及 release 簽章 APK 覆蓋安裝，
+  仍由單元測試或簽章檢查覆蓋，未列為實機 PASS。
+
+**v0.4.0 的既有功能已在一台實機逐項驗證**（Samsung Android 裝置 / Android 16，以 USB + adb 自動化執行）：
 
 - 廣告攔截強度：選擇「標準」後寫入本機設定並下載到 161,902 條規則 — 通過
 - 過濾器管理與「立即更新」：按下後真的重新下載，生效規則由 161,902 條變為 162,803 條 — 通過
@@ -58,7 +67,7 @@ BASELINE 宣告、Wi-Fi → 行動網路 → Wi-Fi 交接（390 → 373 → 393�
 本機建置與單元測試：
 
 - `:app:assembleDebug`、`:app:assembleRelease`（含 R8 與 lintVital）皆成功
-- `:app:testDebugUnitTest`：482 個測試（52 個測試類別）、0 失敗、1 略過
+- `:app:testDebugUnitTest`：603 個測試（69 個測試類別）、0 失敗、1 略過
 
 **只有上述一台裝置完成驗收。** 其他 Android 版本與機型尚未逐一驗證；私人 DNS「自動」模式是否真的
 使用 DoT 無法由平台觀測，該子項維持無法判定（不視為通過）。
