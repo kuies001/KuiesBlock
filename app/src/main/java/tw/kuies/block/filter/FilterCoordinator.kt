@@ -62,33 +62,35 @@ class FilterCoordinator(
     }
 
     /**
-     * Applies the user's choice of [profile]: that tier's list is downloaded and the snapshot is
-     * republished from the stored settings.
+     * Applies the user's choice of [mode].
      *
-     * There is no "switch the filter off" call any more. 關閉 was removed, so the only on/off is the
-     * home screen's protection switch, which this class never touches: choosing a strength picks a
-     * list, it never starts the tunnel.
+     * Preset modes download their one fixed tier list. Custom mode publishes the selected sources
+     * immediately and downloads only the selected sources that have no stored rules yet, so entering
+     * custom mode does not turn into a burst of downloads for everything the user ever ticked.
      *
      * [onStatus] may be called twice — once immediately (the state that needs no network) and once
      * when the download settles — so the screen can show progress honestly instead of freezing.
      * [onFinished] is called exactly once, after the last [onStatus].
      */
-    fun selectStrength(
-        profile: FilterProfile,
+    fun selectMode(
+        mode: FilterMode,
         onStatus: (FilterStatus) -> Unit = {},
         onFinished: () -> Unit = {}
     ) {
         dispatcher.execute {
             try {
                 val base = runCatching { store.load() }.getOrNull() ?: return@execute
-                val chosen = base.withProfile(profile)
+                val chosen = base.withMode(mode)
                 runCatching { store.save(chosen) }
 
-                // Publish before touching the network: choosing a tier whose content is already
-                // stored takes effect now.
+                // Publish before touching the network: a source whose content is already stored takes
+                // effect now, and a mode with nothing downloaded reports exactly that.
                 onStatus(FilterStatus.of(chosen, assembler.assemble(chosen)))
 
-                val settled = downloadProfileList(chosen)
+                val settled = when (mode) {
+                    FilterMode.CUSTOM -> downloadMissingSelected(chosen)
+                    else -> downloadProfileList(chosen)
+                }
                 onStatus(FilterStatus.of(settled, assembler.assemble(settled)))
             } finally {
                 onFinished()
@@ -96,14 +98,49 @@ class FilterCoordinator(
         }
     }
 
-    /** Re-downloads the configured tier's list; a failure keeps whatever is stored. */
+    /** Backwards-compatible entry point for the three preset strengths. */
+    fun selectStrength(
+        profile: FilterProfile,
+        onStatus: (FilterStatus) -> Unit = {},
+        onFinished: () -> Unit = {}
+    ) = selectMode(FilterMode.forProfile(profile), onStatus, onFinished)
+
+    /**
+     * Turns one custom-mode source on or off.
+     *
+     * The new selection is published before any network work. Selecting a source that has never been
+     * downloaded fetches it once; deselecting never deletes its stored content, so turning it back on
+     * can reuse the existing list.
+     */
+    fun selectSource(
+        source: FilterSource,
+        selected: Boolean,
+        onStatus: (FilterStatus) -> Unit = {},
+        onFinished: () -> Unit = {}
+    ) {
+        dispatcher.execute {
+            try {
+                val base = runCatching { store.load() }.getOrNull() ?: return@execute
+                val chosen = base.withSourceSelected(source, selected)
+                runCatching { store.save(chosen) }
+                onStatus(FilterStatus.of(chosen, assembler.assemble(chosen)))
+
+                val settled = if (selected) downloadIfMissing(chosen, source) else chosen
+                onStatus(FilterStatus.of(settled, assembler.assemble(settled)))
+            } finally {
+                onFinished()
+            }
+        }
+    }
+
+    /** Re-downloads every source the active mode is using; a failure keeps whatever is stored. */
     fun refresh(onResult: (FilterStatus) -> Unit = {}) {
         dispatcher.execute {
             val settings = runCatching { store.load() }.getOrNull() ?: return@execute
             // No enabled gate: 關閉 is gone, so every stored settings object is configured and there
             // is nothing left to switch off. Whether the tunnel runs is the home switch's business and
-            // does not stop the stored list from being kept up to date.
-            val refreshed = downloadProfileList(settings)
+            // does not stop the stored lists from being kept up to date.
+            val refreshed = downloadAll(settings, settings.effectiveSubscriptions.filter { it.enabled })
             onResult(FilterStatus.of(refreshed, assembler.assemble(refreshed)))
         }
     }
@@ -297,6 +334,35 @@ class FilterCoordinator(
     private fun downloadProfileList(settings: FilterSettings): FilterSettings {
         val subscription = settings.builtInSubscription ?: return settings
         return download(subscription, settings)
+    }
+
+    /** Downloads only custom-mode sources whose content has never been stored. */
+    private fun downloadMissingSelected(settings: FilterSettings): FilterSettings =
+        downloadAll(settings, settings.effectiveSubscriptions.filter { it.ruleCount <= 0 })
+
+    /** Downloads [source] when it has no usable stored copy yet. */
+    private fun downloadIfMissing(settings: FilterSettings, source: FilterSource): FilterSettings {
+        val subscription = settings.subscriptions.firstOrNull { source.matches(it) }
+            ?: return settings
+        return if (subscription.ruleCount > 0) settings else download(subscription, settings)
+    }
+
+    /**
+     * Downloads each target in order, persisting after every attempt.
+     *
+     * A failure still records the source's new bookkeeping, so the screen can report the real state.
+     * The updater keeps the previously stored content, so a failed attempt never empties a list.
+     */
+    private fun downloadAll(
+        settings: FilterSettings,
+        targets: List<FilterSubscription>
+    ): FilterSettings {
+        var current = settings
+        for (target in targets) {
+            val subscription = current.subscriptions.firstOrNull { it.id == target.id } ?: continue
+            current = download(subscription, current)
+        }
+        return current
     }
 
     /**

@@ -16,6 +16,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,11 +37,11 @@ import tw.kuies.block.dns.DnsDiagnosticReport
 import tw.kuies.block.dns.DnsResolutionState
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.FilterAutoUpdateSettings
-import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterMode
+import tw.kuies.block.filter.FilterSource
+import tw.kuies.block.filter.FilterSourceStatus
 import tw.kuies.block.filter.FilterStatus
-import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.FilterUpdateRecord
-import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.update.ReleaseInfo
 import tw.kuies.block.update.UpdateCheckOutcome
@@ -62,21 +63,15 @@ fun SettingsScreen(
     filterStatus: FilterStatus?,
     filterBusy: Boolean,
     filterUpdating: Boolean,
-    subscriptionBusyId: String?,
     privateDnsMode: PrivateDnsMode,
     /** The real protection state; the strength section derives its status line from it. */
     protectionState: ProtectionState,
     /** Passed through so a failure says which failure it was, exactly as the home screen does. */
     isServiceRunning: Boolean,
-    onSelectStrength: (FilterProfile) -> Unit,
+    onSelectMode: (FilterMode) -> Unit,
     onUpdateFilterNow: () -> Unit,
-    /** [isAllow] picks the list the rule belongs to; the two lists are edited by the same pair. */
-    onAddManualRule: (ManualRule, Boolean) -> Unit,
-    onRemoveManualRule: (ManualRule, Boolean) -> Unit,
-    onAddSubscription: (FilterSubscription) -> Unit,
-    onSetSubscriptionEnabled: (FilterSubscription, Boolean) -> Unit,
-    onUpdateSubscription: (FilterSubscription) -> Unit,
-    onDeleteSubscription: (FilterSubscription) -> Unit,
+    /** Turns one custom-mode source on or off; the last selected source cannot be removed. */
+    onSetSourceSelected: (FilterSource, Boolean) -> Unit,
     /** The automatic-update preference and the outcome of its last run, or null until they are read. */
     autoUpdate: FilterAutoUpdateSettings?,
     updateRecord: FilterUpdateRecord?,
@@ -119,7 +114,8 @@ fun SettingsScreen(
             privateDnsMode = privateDnsMode,
             protectionState = protectionState,
             isServiceRunning = isServiceRunning,
-            onSelectStrength = onSelectStrength
+            onSelectMode = onSelectMode,
+            onSetSourceSelected = onSetSourceSelected
         )
         FilterSourceSection(
             status = filterStatus,
@@ -130,28 +126,6 @@ fun SettingsScreen(
             onSetAutoUpdateEnabled = onSetAutoUpdateEnabled,
             onSetUpdateInterval = onSetUpdateInterval
         )
-        // The user's own rules and sources, rendered only once the status has been read: both sections
-        // act on the objects it carries rather than on a guess about what might be configured.
-        filterStatus?.let { status ->
-            AllowBlockSection(
-                allow = status.manualAllow,
-                block = status.manualBlock,
-                onAddAllow = { onAddManualRule(it, true) },
-                onAddBlock = { onAddManualRule(it, false) },
-                onRemoveAllow = { onRemoveManualRule(it, true) },
-                onRemoveBlock = { onRemoveManualRule(it, false) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            SubscriptionSection(
-                subscriptions = status.customSources,
-                busyId = subscriptionBusyId,
-                onAdd = onAddSubscription,
-                onSetEnabled = onSetSubscriptionEnabled,
-                onUpdate = onUpdateSubscription,
-                onDelete = onDeleteSubscription,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
         BootAutostartSection(
             enabled = bootAutostartEnabled,
             alwaysOnVpnEnabled = alwaysOnVpnEnabled,
@@ -238,31 +212,51 @@ private fun FilterSourceSection(
             return@SectionCard
         }
         Text(
-            text = FilterPresentation.mainListName(status),
+            text = stringResource(R.string.filter_source_active_sources),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = FilterPresentation.activeSourceNames(status),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Text(
-            text = "維護者：${FilterPresentation.MAINTAINER}・${FilterPresentation.MAINTAINER_HOME}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = FilterPresentation.LICENCE,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        LabeledValue(
-            label = stringResource(R.string.filter_source_enabled),
-            value = FilterPresentation.mainListEnabledLabel(status)
-        )
+        val now = System.currentTimeMillis()
+        status.sourceStatuses.filter { it.enabled }.forEach { source ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = source.displayName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                source.maintainer?.let { maintainer ->
+                    Text(
+                        text = "維護者：$maintainer",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                FilterSource.fromId(source.id)?.purpose?.let { purpose ->
+                    Text(
+                        text = purpose,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = FilterPresentation.sourceStatusLabel(source, now),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         LabeledValue(
             label = stringResource(R.string.filter_source_rules),
             value = FilterPresentation.effectiveRulesLabel(status)
         )
         LabeledValue(
             label = stringResource(R.string.filter_source_last_update),
-            value = FilterPresentation.updateResultLabel(status, System.currentTimeMillis())
+            value = FilterPresentation.updateResultLabel(status, now)
         )
         Button(
             onClick = onUpdateNow,
@@ -281,16 +275,21 @@ private fun FilterSourceSection(
             onSetEnabled = onSetAutoUpdateEnabled,
             onSetInterval = onSetUpdateInterval
         )
+        Text(
+            text = FilterPresentation.LICENCE,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 /**
- * The interception strength, plus the state that decides whether it is really doing anything.
+ * The interception mode, plus the state that decides whether it is really doing anything.
  *
- * Only the three tiers are offered: the 關閉 choice was removed, so the local filter is always
- * configured and the home screen's protection switch is the single on/off. The state line is derived
- * by [FilterPresentation] from the real [ProtectionState], which cannot say 「生效中」 while protection
- * is not running, while it is starting, or while the system Private DNS owns name resolution.
+ * Four choices are offered. The three presets are each fixed to one HaGeZi tier; 自訂 is the only mode
+ * that shows the source picker. The state line is derived by [FilterPresentation] from the real
+ * [ProtectionState], which cannot say 「生效中」 while protection is not running, while it is starting,
+ * or while the system Private DNS owns name resolution.
  */
 @Composable
 private fun InterceptionStrengthSection(
@@ -299,7 +298,8 @@ private fun InterceptionStrengthSection(
     privateDnsMode: PrivateDnsMode,
     protectionState: ProtectionState,
     isServiceRunning: Boolean,
-    onSelectStrength: (FilterProfile) -> Unit
+    onSelectMode: (FilterMode) -> Unit,
+    onSetSourceSelected: (FilterSource, Boolean) -> Unit
 ) {
     SectionCard(title = stringResource(R.string.settings_filter_section)) {
         Text(
@@ -307,13 +307,20 @@ private fun InterceptionStrengthSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        FilterProfile.entries.forEach { profile ->
-            StrengthOption(
-                profile = profile,
+        FilterMode.entries.forEach { mode ->
+            ModeOption(
+                mode = mode,
                 // Until the settings have loaded, nothing is marked as the current choice.
-                selected = status != null && status.profile == profile,
+                selected = status != null && status.mode == mode,
                 enabled = !busy,
-                onSelectStrength = onSelectStrength
+                onSelectMode = onSelectMode
+            )
+        }
+        if (status?.mode == FilterMode.CUSTOM) {
+            CustomSourcePicker(
+                status = status,
+                busy = busy,
+                onSetSourceSelected = onSetSourceSelected
             )
         }
         LabeledValue(
@@ -325,37 +332,156 @@ private fun InterceptionStrengthSection(
     }
 }
 
-/** One row of the strength list; a radio row rather than a chip, which cannot overflow at 320dp. */
+/** One row of the mode list; a radio row rather than a chip, which cannot overflow at 320dp. */
 @Composable
-private fun StrengthOption(
-    profile: FilterProfile,
+private fun ModeOption(
+    mode: FilterMode,
     selected: Boolean,
     enabled: Boolean,
-    onSelectStrength: (FilterProfile) -> Unit
+    onSelectMode: (FilterMode) -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) { onSelectStrength(profile) }
+            .clickable(enabled = enabled) { onSelectMode(mode) }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         RadioButton(
             selected = selected,
-            onClick = { onSelectStrength(profile) },
+            onClick = { onSelectMode(mode) },
             enabled = enabled
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = FilterPresentation.strengthLabel(profile),
+                text = FilterPresentation.modeLabel(mode),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = FilterPresentation.strengthDetail(profile),
+                text = FilterPresentation.modeDetail(mode),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+/**
+ * The source checklist shown only in custom mode.
+ *
+ * The HaGeZi Multi tiers render as radio rows because exactly one may be active; every other source is
+ * a checkbox and may be combined. The last remaining source cannot be unchecked, so custom mode never
+ * ends up with nothing to filter with.
+ */
+@Composable
+private fun CustomSourcePicker(
+    status: FilterStatus,
+    busy: Boolean,
+    onSetSourceSelected: (FilterSource, Boolean) -> Unit
+) {
+    Text(
+        text = stringResource(R.string.filter_custom_sources_title),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(top = 8.dp)
+    )
+    Text(
+        text = stringResource(R.string.filter_custom_sources_body),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    val selectedCount = status.selectedSources.size
+    val now = System.currentTimeMillis()
+    FilterSource.entries.forEach { source ->
+        val selected = source.id in status.selectedSources
+        val sourceStatus = status.sourceStatuses.firstOrNull { it.id == source.id }
+        SourceOption(
+            source = source,
+            selected = selected,
+            sourceStatus = sourceStatus,
+            now = now,
+            // A selected checkbox cannot be the last one removed; a radio row changes by selecting
+            // another tier rather than by unchecking itself.
+            enabled = !busy && (!selected || source.isMultiTier || selectedCount > 1),
+            onSetSelected = { checked -> onSetSourceSelected(source, checked) }
+        )
+    }
+}
+
+@Composable
+private fun SourceOption(
+    source: FilterSource,
+    selected: Boolean,
+    sourceStatus: FilterSourceStatus?,
+    now: Long,
+    enabled: Boolean,
+    onSetSelected: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) {
+                if (source.isMultiTier) {
+                    if (!selected) onSetSelected(true)
+                } else {
+                    onSetSelected(!selected)
+                }
+            }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        if (source.isMultiTier) {
+            RadioButton(
+                selected = selected,
+                onClick = {
+                    if (enabled && !selected) onSetSelected(true)
+                },
+                enabled = enabled
+            )
+        } else {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { checked -> if (enabled) onSetSelected(checked) },
+                enabled = enabled
+            )
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp)
+        ) {
+            Text(
+                text = source.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = source.purpose,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = FilterPresentation.maintainerLabel(source),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "授權：${source.licenceName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (selected && sourceStatus != null) {
+                Text(
+                    text = FilterPresentation.sourceStatusLabel(sourceStatus, now),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (sourceStatus.state == tw.kuies.block.filter.SubscriptionState.FAILED) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
         }
     }
 }

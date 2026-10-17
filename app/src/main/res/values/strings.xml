@@ -60,9 +60,12 @@
     <string name="settings_update_dialog_download">前往下載</string>
     <string name="settings_filter_section">廣告攔截強度</string>
     <string name="settings_filter_body">本機規則只對經過 KuiesBlock 的 DNS 查詢生效。所選清單由裝置自行下載，App 不內建清單內容。</string>
+    <string name="filter_custom_sources_title">自訂過濾來源</string>
+    <string name="filter_custom_sources_body">HaGeZi Multi 主清單只能擇一；其他來源可同時啟用。至少保留一個來源。</string>
     <string name="filter_state_label">目前狀態</string>
     <string name="filter_state_label_loading">讀取中…</string>
     <string name="settings_filter_sources_section">過濾器管理</string>
+    <string name="filter_source_active_sources">目前有效的過濾來源</string>
     <string name="filter_source_enabled">狀態</string>
     <string name="filter_source_rules">生效規則</string>
     <string name="filter_source_last_update">最近一次更新</string>

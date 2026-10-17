@@ -6,10 +6,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterPreferenceCodec
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterSettings
 import tw.kuies.block.filter.FilterSettingsStore
+import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.MatchScope
@@ -310,6 +312,77 @@ class FilterSettingsStoreTest {
             listOf(FilterSubscription.PROFILE_SUBSCRIPTION_ID, "alpha", "zebra"),
             loaded.subscriptions.map { it.id }
         )
+    }
+
+    @Test
+    fun anEnabledLegacyUserSourceMigratesToCustomModeAndKeepsTheTier() {
+        prefs.rawPut("profile", FilterProfile.STRICT.id)
+        prefs.rawPut(
+            "subscriptions",
+            setOf(
+                FilterPreferenceCodec.encode(
+                    listOf(
+                        FilterSubscription.PROFILE_SUBSCRIPTION_ID, FilterProfile.STRICT.listName,
+                        FilterProfile.STRICT.primaryUrl, "BUILT_IN", "1", "READY", "211887",
+                        "1700000000000", "", "\"strict\""
+                    )
+                ),
+                FilterPreferenceCodec.encode(
+                    listOf("mine", "My list", "https://lists.example.com/ads.txt", "USER", "1", "READY", "42", "", "", "")
+                )
+            )
+        )
+
+        val loaded = store.load()
+
+        assertEquals(FilterMode.CUSTOM, loaded.mode)
+        assertEquals(FilterProfile.STRICT, loaded.profile)
+        assertEquals(setOf(FilterSource.HAGEZI_PRO_PLUS.id), loaded.selectedSources)
+        assertEquals(listOf("mine"), loaded.customSubscriptions.map { it.id })
+        assertEquals(
+            "the old effective combination keeps contributing in custom mode",
+            setOf(FilterSubscription.PROFILE_SUBSCRIPTION_ID, "mine"),
+            loaded.effectiveSubscriptions.map { it.id }.toSet()
+        )
+
+        // Saving persists the migration, so a later launch cannot decide it again.
+        store.save(loaded)
+        val reloaded = store.load()
+        assertEquals(FilterMode.CUSTOM, reloaded.mode)
+        assertEquals(loaded.selectedSources, reloaded.selectedSources)
+        assertEquals(FilterProfile.STRICT, reloaded.profile)
+    }
+
+    @Test
+    fun aDeliberatePresetChoiceIsNotUndoneByALegacyUserSource() {
+        store.save(FilterSettings.forProfile(FilterProfile.RELAXED).withSubscription(customSource))
+
+        val loaded = store.load()
+
+        assertEquals(FilterMode.RELAXED, loaded.mode)
+        assertEquals(FilterProfile.RELAXED, loaded.profile)
+        assertEquals("the legacy source is kept, not deleted", 1, loaded.customSubscriptions.size)
+        assertEquals(
+            "but a preset mode does not publish it",
+            listOf(FilterSubscription.PROFILE_SUBSCRIPTION_ID),
+            loaded.effectiveSubscriptions.map { it.id }
+        )
+    }
+
+    @Test
+    fun modeAndCustomSelectionRoundTrip() {
+        val settings = FilterSettings.forProfile(FilterProfile.STANDARD)
+            .withMode(FilterMode.CUSTOM)
+            .withSourceSelected(FilterSource.HAGEZI_TIF, true)
+            .withSourceSelected(FilterSource.OISD, true)
+
+        store.save(settings)
+        val loaded = store.load()
+
+        assertEquals(FilterMode.CUSTOM, loaded.mode)
+        assertEquals(settings.selectedSources, loaded.selectedSources)
+        assertTrue(loaded.subscriptions.any { it.id == FilterSource.HAGEZI_TIF.subscriptionId })
+        assertTrue(loaded.subscriptions.any { it.id == FilterSource.OISD.subscriptionId })
     }
 
     private fun readResourceFile(relative: String): String {

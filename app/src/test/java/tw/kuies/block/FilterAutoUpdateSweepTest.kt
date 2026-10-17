@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tw.kuies.block.filter.FilterAssembler
 import tw.kuies.block.filter.FilterCoordinator
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterRefreshSummary
 import tw.kuies.block.filter.FilterSettings
@@ -167,6 +168,7 @@ class FilterAutoUpdateSweepTest {
         val prefs = FakeSharedPreferences()
         FilterSettingsStore(prefs).save(
             FilterSettings(
+                mode = FilterMode.CUSTOM,
                 subscriptions = listOf(
                     FilterSubscription.forProfile(FilterProfile.STANDARD),
                     FilterSubscription(

@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tw.kuies.block.filter.FilterAssembler
 import tw.kuies.block.filter.FilterDecision
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterRepository
 import tw.kuies.block.filter.FilterSettings
@@ -70,7 +71,7 @@ class FilterAssemblerTest {
         enabled: Boolean = true
     ): FilterSettings {
         contentStore.write(customSource.id, text)
-        return settings.withSubscription(
+        return settings.withMode(FilterMode.CUSTOM).withSubscription(
             customSource.copy(
                 state = state,
                 enabled = enabled,
@@ -164,7 +165,7 @@ class FilterAssemblerTest {
     }
 
     @Test
-    fun manualRulesReachTheSnapshotWithTheirOwnScope() {
+    fun storedManualRulesNoLongerReachTheSnapshotButStayInTheSettings() {
         val settings = mainList(FilterProfile.STANDARD, strictOnly)
             .addManualAllow(ManualRule("allowed.example", MatchScope.EXACT))
             .addManualAllow(ManualRule("family.example", MatchScope.SUBDOMAIN))
@@ -173,33 +174,29 @@ class FilterAssemblerTest {
 
         val snapshot = assembler.assemble(settings)
 
-        assertEquals(FilterDecision.ALLOW, snapshot.decide("allowed.example"))
-        assertEquals(
-            "an exact allow must not cover a subdomain",
-            FilterDecision.UPSTREAM,
-            snapshot.decide("sub.allowed.example")
-        )
-        assertEquals(FilterDecision.ALLOW, snapshot.decide("sub.family.example"))
-        assertEquals(FilterDecision.BLOCK, snapshot.decide("blocked.example"))
-        assertEquals(
-            "an exact block must not cover a subdomain",
-            FilterDecision.UPSTREAM,
-            snapshot.decide("sub.blocked.example")
-        )
-        assertEquals(FilterDecision.BLOCK, snapshot.decide("sub.ads.example"))
-        assertEquals(4, snapshot.userRuleCount)
+        // The editor is gone from the settings page, so these rules must not keep filtering invisibly.
+        assertEquals(FilterDecision.UPSTREAM, snapshot.decide("allowed.example"))
+        assertEquals(FilterDecision.UPSTREAM, snapshot.decide("sub.family.example"))
+        assertEquals(FilterDecision.UPSTREAM, snapshot.decide("blocked.example"))
+        assertEquals(FilterDecision.UPSTREAM, snapshot.decide("sub.ads.example"))
+        assertEquals(0, snapshot.userRuleCount)
+
+        // The data itself is kept for a future migration.
+        assertEquals(2, settings.manualAllow.size)
+        assertEquals(2, settings.manualBlock.size)
     }
 
     @Test
-    fun aManualAllowWinsOverASubscriptionBlock() {
+    fun aStoredManualAllowNoLongerOverridesASubscriptionBlock() {
         val blocked = "||allowed.example^\n||other.example^\n"
         val settings = mainList(FilterProfile.STANDARD, blocked)
             .addManualAllow(ManualRule("allowed.example", MatchScope.SUBDOMAIN))
 
         val snapshot = assembler.assemble(settings)
 
-        assertEquals(FilterDecision.ALLOW, snapshot.decide("allowed.example"))
+        assertEquals(FilterDecision.BLOCK, snapshot.decide("allowed.example"))
         assertEquals(FilterDecision.BLOCK, snapshot.decide("other.example"))
+        assertEquals(0, snapshot.userRuleCount)
     }
 
     @Test

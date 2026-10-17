@@ -42,13 +42,12 @@ import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterAutoUpdateStore
 import tw.kuies.block.filter.FilterCoordinatorHolder
-import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSettingsStore
+import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
-import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.FilterUpdateSchedulePolicy
-import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
 import tw.kuies.block.update.AppVersion
@@ -126,13 +125,9 @@ fun KuiesBlockApp(
     var filterStatus by remember { mutableStateOf<FilterStatus?>(null) }
     var filterBusy by remember { mutableStateOf(false) }
 
-    // A manual update is separate from choosing a strength: it re-downloads the list that is already
-    // in use, so the two must not share one flag and make the screen describe the wrong action.
+    // A manual update is separate from choosing a mode: it re-downloads the lists already in use, so
+    // the two must not share one flag and make the screen describe the wrong action.
     var filterUpdating by remember { mutableStateOf(false) }
-
-    // Which custom source is downloading right now, if any. Per source on purpose: one busy row must
-    // not make every other row look like it is working.
-    var subscriptionBusyId by remember { mutableStateOf<String?>(null) }
 
     // The automatic-update preference and the outcome of its last run, or null until they are read.
     var autoUpdate by remember { mutableStateOf<FilterAutoUpdateSettings?>(null) }
@@ -310,28 +305,46 @@ fun KuiesBlockApp(
     }
 
     /**
-     * Applies a strength choice.
+     * Applies an interception mode.
      *
-     * There is no "off" choice to pass any more: turning protection off is the home switch's job, and
-     * picking a tier only chooses which list is used — it never starts the tunnel.
+     * There is no "off" choice: turning protection off is the home switch's job, and picking a mode
+     * only chooses which lists are used — it never starts the tunnel.
      *
      * The coordinator calls back twice: immediately with the state that needs no network, then once
      * the download settled. Only the second callback clears the busy flag, so the screen cannot claim
      * the download finished while it is still running.
      */
-    fun selectFilterStrength(profile: FilterProfile) {
+    fun selectFilterMode(mode: FilterMode) {
+        if (filterBusy) return
         filterBusy = true
-        FilterCoordinatorHolder.get(appContext).selectStrength(
-            profile = profile,
+        FilterCoordinatorHolder.get(appContext).selectMode(
+            mode = mode,
             onStatus = { status -> mainHandler.post { filterStatus = status } },
             onFinished = { mainHandler.post { filterBusy = false } }
         )
     }
 
     /**
-     * Re-downloads the list that is already in use, on the user's explicit request.
+     * Turns one custom-mode source on or off.
      *
-     * A failure keeps the previous list and reports itself through the status, and nothing here can
+     * The selection is published before any network work, so ticking a source that is already
+     * downloaded takes effect immediately. A source with no stored content is downloaded once.
+     */
+    fun selectFilterSource(source: FilterSource, selected: Boolean) {
+        if (filterBusy) return
+        filterBusy = true
+        FilterCoordinatorHolder.get(appContext).selectSource(
+            source = source,
+            selected = selected,
+            onStatus = { status -> mainHandler.post { filterStatus = status } },
+            onFinished = { mainHandler.post { filterBusy = false } }
+        )
+    }
+
+    /**
+     * Re-downloads the lists that are already in use, on the user's explicit request.
+     *
+     * A failure keeps the previous lists and reports itself through the status, and nothing here can
      * leave the device without DNS: the download never runs on the tunnel's packet path.
      */
     fun updateFilterNow() {
@@ -342,66 +355,6 @@ fun KuiesBlockApp(
                 filterStatus = status
                 filterUpdating = false
             }
-        }
-    }
-
-    /**
-     * Adds or removes one of the user's own rules.
-     *
-     * Local only: the coordinator writes the settings and republishes the snapshot on its own thread,
-     * so a running tunnel picks the change up on its next query and nothing is downloaded.
-     */
-    fun editManualRule(rule: ManualRule, isAllow: Boolean, add: Boolean) {
-        val coordinator = FilterCoordinatorHolder.get(appContext)
-        val onStatus: (FilterStatus) -> Unit = { status -> mainHandler.post { filterStatus = status } }
-        when {
-            isAllow && add -> coordinator.addManualAllow(rule, onStatus)
-            isAllow -> coordinator.removeManualAllow(rule.domain, onStatus)
-            add -> coordinator.addManualBlock(rule, onStatus)
-            else -> coordinator.removeManualBlock(rule.domain, onStatus)
-        }
-    }
-
-    /**
-     * Adds a custom source and fetches it straight away.
-     *
-     * A source the user just typed in should not sit empty waiting for a second tap, so the download
-     * follows immediately; the row shows itself as busy until it settles.
-     */
-    fun addCustomSubscription(subscription: FilterSubscription) {
-        val coordinator = FilterCoordinatorHolder.get(appContext)
-        subscriptionBusyId = subscription.id
-        coordinator.addSubscription(subscription) { status ->
-            mainHandler.post { filterStatus = status }
-            coordinator.updateSubscription(subscription) { updated ->
-                mainHandler.post {
-                    filterStatus = updated
-                    subscriptionBusyId = null
-                }
-            }
-        }
-    }
-
-    fun setSubscriptionEnabled(subscription: FilterSubscription, enabled: Boolean) {
-        FilterCoordinatorHolder.get(appContext).setSubscriptionEnabled(subscription, enabled) { status ->
-            mainHandler.post { filterStatus = status }
-        }
-    }
-
-    fun updateSubscription(subscription: FilterSubscription) {
-        if (subscriptionBusyId != null) return
-        subscriptionBusyId = subscription.id
-        FilterCoordinatorHolder.get(appContext).updateSubscription(subscription) { status ->
-            mainHandler.post {
-                filterStatus = status
-                subscriptionBusyId = null
-            }
-        }
-    }
-
-    fun deleteSubscription(subscription: FilterSubscription) {
-        FilterCoordinatorHolder.get(appContext).removeSubscription(subscription.id) { status ->
-            mainHandler.post { filterStatus = status }
         }
     }
 
@@ -615,22 +568,14 @@ fun KuiesBlockApp(
             filterStatus = filterStatus,
             filterBusy = filterBusy,
             filterUpdating = filterUpdating,
-            subscriptionBusyId = subscriptionBusyId,
             privateDnsMode = privateDnsMode,
             // The real state, not a yes/no: the strength section tells a fresh install, a start in
             // progress, a working tunnel and a failure apart — see FilterPresentation.stateLabel.
             protectionState = protectionState,
             isServiceRunning = KuiesVpnService.isRunning,
-            onSelectStrength = { profile -> selectFilterStrength(profile) },
+            onSelectMode = { mode -> selectFilterMode(mode) },
             onUpdateFilterNow = { updateFilterNow() },
-            onAddManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = true) },
-            onRemoveManualRule = { rule, isAllow -> editManualRule(rule, isAllow, add = false) },
-            onAddSubscription = { subscription -> addCustomSubscription(subscription) },
-            onSetSubscriptionEnabled = { subscription, enabled ->
-                setSubscriptionEnabled(subscription, enabled)
-            },
-            onUpdateSubscription = { subscription -> updateSubscription(subscription) },
-            onDeleteSubscription = { subscription -> deleteSubscription(subscription) },
+            onSetSourceSelected = { source, selected -> selectFilterSource(source, selected) },
             autoUpdate = autoUpdate,
             updateRecord = updateRecord,
             onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },

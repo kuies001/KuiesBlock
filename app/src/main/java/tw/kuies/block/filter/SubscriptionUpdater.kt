@@ -148,7 +148,9 @@ class SubscriptionUpdater(
     private fun runUpdate(request: SubscriptionUpdateRequest): SubscriptionUpdateResult {
         val subscription = request.subscription
         val allowedHosts = if (subscription.origin == SubscriptionOrigin.BUILT_IN) {
-            BuiltInSubscriptionHosts.forProfile(request.profile)
+            // Built-in sources each have their own official host. A shared tier allow-list would
+            // either reject AdGuard/OISD or let every built-in source contact the HaGeZi mirror.
+            BuiltInSubscriptionHosts.forUrl(subscription.url)
         } else {
             emptySet()
         }

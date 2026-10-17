@@ -8,15 +8,15 @@ package tw.kuies.block.filter
  * rule set or the new one.
  *
  * What it decides:
- *  * Only subscriptions that may contribute are read ([FilterSettings.contributesToSnapshot]).
- *  * The main list is the active tier's own list and only that one — the three tiers are never
- *    combined, because they overlap and stacking them would make the effective strength impossible to
- *    describe honestly ([FilterSettings.isProfileList]).
+ *  * Only the sources the active mode selects are read ([FilterSettings.effectiveSubscriptions]).
+ *    A preset mode therefore publishes its own HaGeZi tier and nothing else, even if a legacy user
+ *    subscription or another downloaded preset source is still stored.
+ *  * Only sources that may contribute are read ([FilterSettings.contributesToSnapshot]).
  *  * A source whose stored text is missing, empty or longer than [maxRules] contributes nothing rather
  *    than partial rules.
- *
- * Manual rules are passed through as they are; the snapshot canonicalises them and drops anything that
- * is not a domain.
+ *  * Manual allow/block rules stored by v0.4.1 and earlier are **not** published. The settings page no
+ *    longer offers an editor, so keeping them active would be a hidden rule set the user cannot see
+ *    or change. The stored lists stay in the preferences file for a future migration.
  *
  * Parsing happens here, off the packet path. Two subscriptions' rule sets are merged by union, so this
  * cost is paid once per publish, not per query.
@@ -36,13 +36,8 @@ class FilterAssembler(
         val blocked = ArrayList<String>(1024)
         val allowed = ArrayList<String>(64)
 
-        for (subscription in settings.subscriptions) {
+        for (subscription in settings.effectiveSubscriptions) {
             if (!settings.contributesToSnapshot(subscription)) continue
-            if (subscription.origin == SubscriptionOrigin.BUILT_IN &&
-                !settings.isProfileList(subscription)
-            ) {
-                continue
-            }
 
             val text = contentStore.read(subscription.id) ?: continue
             val parsed = DnsRuleParser.parse(text, maxRules)
@@ -54,8 +49,10 @@ class FilterAssembler(
         }
 
         return repository.publish(
-            manualAllow = settings.manualAllow,
-            manualBlock = settings.manualBlock,
+            // Deliberately empty: the manual-rule editor was removed from the settings page. The data
+            // stays in FilterSettings for compatibility, but it must not keep filtering invisibly.
+            manualAllow = emptyList(),
+            manualBlock = emptyList(),
             subscriptionBlock = DomainSet.ofNormalised(blocked),
             subscriptionAllow = DomainSet.ofNormalised(allowed)
         )

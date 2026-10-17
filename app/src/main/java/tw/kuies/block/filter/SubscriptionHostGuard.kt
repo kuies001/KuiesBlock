@@ -209,7 +209,7 @@ class SubscriptionHostGuard(
 class BlockedHostException(val reason: SubscriptionFailure) :
     UnknownHostException("subscription host refused: ${reason.label}")
 
-/** The hosts a tier's own published URLs may be fetched from. */
+/** The hosts a built-in source's own published URLs may be fetched from. */
 object BuiltInSubscriptionHosts {
 
     fun forProfile(profile: FilterProfile): Set<String> {
@@ -218,6 +218,16 @@ object BuiltInSubscriptionHosts {
         hostOf(profile.fallbackUrl)?.let(hosts::add)
         return hosts
     }
+
+    /**
+     * The single official host of [url].
+     *
+     * Each [FilterSource] has its own official address, which may live on a different host from the
+     * HaGeZi tiers (AdGuard on github.io, OISD on oisd.nl). Built-in sources are therefore limited to
+     * the host of the address they are actually configured with, never to a shared allow-list.
+     */
+    fun forUrl(url: String): Set<String> =
+        hostOf(url)?.let { setOf(it) } ?: emptySet()
 
     fun hostOf(url: String): String? = url.toHttpUrlOrNull()?.host
 }

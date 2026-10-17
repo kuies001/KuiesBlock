@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kuies.block.filter.FilterAutoUpdateSelection
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterSettings
 import tw.kuies.block.filter.FilterSubscription
@@ -114,9 +115,10 @@ class FilterAutoUpdateSelectionTest {
     }
 
     @Test
-    fun `select keeps configuration order and drops everything else`() {
+    fun `select only returns sources the active mode is using`() {
         val failedUserSource = userAdded(state = SubscriptionState.FAILED, ruleCount = 0)
         val settings = FilterSettings(
+            mode = FilterMode.CUSTOM,
             subscriptions = listOf(
                 builtIn(state = SubscriptionState.NOT_READY, ruleCount = 0),
                 failedUserSource,
@@ -124,5 +126,19 @@ class FilterAutoUpdateSelectionTest {
             )
         )
         assertEquals(listOf(failedUserSource), FilterAutoUpdateSelection.select(settings))
+    }
+
+    @Test
+    fun `a preset mode never refreshes a stored user source`() {
+        val enabledUserSource = userAdded()
+        val settings = FilterSettings(
+            mode = FilterMode.STANDARD,
+            subscriptions = listOf(builtIn(), enabledUserSource)
+        )
+        assertEquals(
+            "preset modes update only their own HaGeZi tier",
+            listOf(builtIn()),
+            FilterAutoUpdateSelection.select(settings)
+        )
     }
 }

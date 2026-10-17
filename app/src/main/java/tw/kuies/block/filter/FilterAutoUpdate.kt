@@ -133,8 +133,8 @@ object FilterAutoUpdateSelection {
             else -> false
         }
 
-    /** The sources of [settings] a sweep may touch, in configuration order. */
+    /** The active sources of [settings] a sweep may touch, in configuration order. */
     fun select(settings: FilterSettings): List<FilterSubscription> =
-        settings.subscriptions.filter(::shouldRefresh)
+        settings.effectiveSubscriptions.filter(::shouldRefresh)
 }
 

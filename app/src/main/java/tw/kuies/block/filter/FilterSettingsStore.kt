@@ -29,8 +29,12 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
             FilterProfile.fromId(prefs.getString(KEY_PROFILE, null))
         }
         val stored = guarded(emptyList<StoredSubscription>()) { readStoredSubscriptions() }
+        val mode = guarded(FilterMode.forProfile(profile)) { migratedMode(profile, stored) }
+        val selectedSources = guarded(defaultSelection(profile)) {
+            readSelection(profile)
+        }
         val subscriptions = guarded(listOf(StoredSubscription(FilterSubscription.forProfile(profile), null))) {
-            normalise(stored, profile)
+            normalise(stored, profile, selectedSources)
         }
 
         val etags = HashMap<String, String>(subscriptions.size)
@@ -40,6 +44,8 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         return FilterSettings(
             profile = profile,
+            mode = mode,
+            selectedSources = selectedSources,
             // Always configured, never read back as a gate. A stored `false` is the 關閉 choice of an
             // older build, and that choice no longer exists: it migrates to "configured" and is never
             // honoured again, so an upgraded install neither loses its downloaded list nor silently
@@ -75,6 +81,8 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
 
         prefs.edit()
             .putString(KEY_PROFILE, settings.profile.id)
+            .putString(KEY_MODE, settings.mode.id)
+            .putStringSet(KEY_SELECTED_SOURCES, settings.selectedSources.toSet())
             // Written for an older build's benefit; loading never gates on it any more.
             .putBoolean(KEY_ENABLED, settings.enabled)
             .putStringSet(KEY_SUBSCRIPTIONS, records)
@@ -100,13 +108,14 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
     }
 
     /**
-     * Restores the two invariants the rest of the module relies on: exactly one main list, pointing
-     * at the active tier, and a stable order (a set has none, so the profile list comes first and the
-     * rest are sorted by name).
+     * Restores the invariants the rest of the module relies on: exactly one main list, pointing
+     * at the active tier, a record for every selected custom source, and a stable order (a set has
+     * none, so the profile list comes first and the rest are sorted by name).
      */
     private fun normalise(
         stored: List<StoredSubscription>,
-        profile: FilterProfile
+        profile: FilterProfile,
+        selectedSources: Set<String>
     ): List<StoredSubscription> {
         val profileList = stored.firstOrNull {
             it.subscription.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID
@@ -127,7 +136,66 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
                     { it.subscription.id }
                 )
             )
-        return listOf(main) + custom
+        val result = ArrayList<StoredSubscription>(custom.size + 1)
+        result.add(main)
+        result.addAll(custom)
+
+        // A selected source needs an entry even before its first download, so the settings page can
+        // show the real NOT_READY state instead of inventing one. The main list is governed by
+        // [profile]; a preserved custom selection from an older mode must not replace it.
+        for (source in FilterSource.entries) {
+            if (source.id !in selectedSources) continue
+            if (source.isMultiTier && source.profile != profile) continue
+            val index = result.indexOfFirst { it.subscription.id == source.subscriptionId }
+            when {
+                index < 0 -> result.add(StoredSubscription(source.subscription(), null))
+                !source.matches(result[index].subscription) ->
+                    result[index] = StoredSubscription(source.subscription(), null)
+            }
+        }
+        return result
+    }
+
+    /**
+     * The mode that applies to this install.
+     *
+     * If a mode was saved before, it always wins: the v0.4.1 migration below runs exactly once, and a
+     * later deliberate choice of a preset mode is never undone by the presence of an old custom
+     * subscription.
+     */
+    private fun migratedMode(
+        profile: FilterProfile,
+        stored: List<StoredSubscription>
+    ): FilterMode {
+        prefs.getString(KEY_MODE, null)?.let { saved ->
+            return FilterMode.entries.firstOrNull { it.id == saved }
+                ?: FilterMode.forProfile(profile)
+        }
+        val hadEnabledUserSource = stored.any {
+            it.subscription.origin == SubscriptionOrigin.USER && it.subscription.enabled
+        }
+        return if (hadEnabledUserSource) FilterMode.CUSTOM else FilterMode.forProfile(profile)
+    }
+
+    private fun defaultSelection(profile: FilterProfile): Set<String> =
+        setOf(FilterSource.forProfile(profile).id)
+
+    /**
+     * The stored custom selection, sanitised to known sources and at most one HaGeZi Multi tier.
+     *
+     * The selection is kept even while a preset mode is active, so switching modes never erases which
+     * custom sources the user had ticked.
+     */
+    private fun readSelection(profile: FilterProfile): Set<String> {
+        val fallback = defaultSelection(profile)
+        val raw = prefs.getStringSet(KEY_SELECTED_SOURCES, null) ?: return fallback
+        val known = FilterSource.entries.filter { it.id in raw }
+        val multi = known.firstOrNull { it.isMultiTier }
+        val selection = known
+            .filter { !it.isMultiTier || it == multi }
+            .map { it.id }
+            .toSet()
+        return selection.ifEmpty { fallback }
     }
 
     private fun decodeSubscription(record: String): StoredSubscription? {
@@ -229,6 +297,8 @@ class FilterSettingsStore(private val prefs: SharedPreferences) {
         const val PREFS_NAME = "kuies_block_filter"
 
         private const val KEY_PROFILE = "profile"
+        private const val KEY_MODE = "mode"
+        private const val KEY_SELECTED_SOURCES = "selected_sources"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_SUBSCRIPTIONS = "subscriptions"
         private const val KEY_MANUAL_ALLOW = "manual_allow"

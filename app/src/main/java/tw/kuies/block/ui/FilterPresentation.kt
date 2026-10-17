@@ -4,7 +4,10 @@ import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.BuiltInFilterAttribution
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
+import tw.kuies.block.filter.FilterSource
+import tw.kuies.block.filter.FilterSourceStatus
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.FilterUpdateRecord
@@ -24,23 +27,36 @@ import tw.kuies.block.filter.UpdateCheckOutcome
 object FilterPresentation {
 
     /**
-     * The strength as the user sees it.
+     * The four mode choices as the user sees them.
      *
-     * Only the three tiers exist: the 關閉 choice was removed, so there is no off state to name here —
-     * the home screen's protection switch is the single on/off.
+     * The three presets keep their v0.4.1 wording; 自訂 is the new fourth choice and is the only one
+     * that exposes a source picker.
      */
-    fun strengthLabel(profile: FilterProfile): String = when (profile) {
-        FilterProfile.RELAXED -> "寬鬆"
-        FilterProfile.STANDARD -> "標準（推薦）"
-        FilterProfile.STRICT -> "嚴格"
+    fun modeLabel(mode: FilterMode): String = when (mode) {
+        FilterMode.RELAXED -> "寬鬆"
+        FilterMode.STANDARD -> "標準（推薦）"
+        FilterMode.STRICT -> "嚴格"
+        FilterMode.CUSTOM -> "自訂"
     }
 
-    /** A one-line description of what the chosen tier does, so 嚴格's aggressiveness is not a surprise. */
-    fun strengthDetail(profile: FilterProfile): String = when (profile) {
-        FilterProfile.RELAXED -> "只擋最明顯的廣告與追蹤網域，誤擋機會最低。"
-        FilterProfile.STANDARD -> "廣泛攔截廣告與追蹤網域，日常使用的建議選項。"
-        FilterProfile.STRICT -> "攔截最積極，可能影響部分網站或 App 的功能。"
+    /** A one-line description of what the chosen mode does, so the trade-offs are visible up front. */
+    fun modeDetail(mode: FilterMode): String = when (mode) {
+        FilterMode.RELAXED -> "固定使用 HaGeZi Multi LIGHT，誤擋機會最低。"
+        FilterMode.STANDARD -> "固定使用 HaGeZi Multi NORMAL，日常使用的建議選項。"
+        FilterMode.STRICT -> "固定使用 HaGeZi Multi PRO++，攔截最積極。"
+        FilterMode.CUSTOM -> "自行勾選要啟用的過濾來源；HaGeZi Multi 主清單只能擇一。"
     }
+
+    /**
+     * The strength as the user sees it.
+     *
+     * Only the three preset tiers exist as [FilterProfile] values: [FilterMode.CUSTOM] is a mode, not a
+     * fourth list, and is labelled by [modeLabel].
+     */
+    fun strengthLabel(profile: FilterProfile): String = modeLabel(FilterMode.forProfile(profile))
+
+    /** A one-line description of what the chosen tier does. */
+    fun strengthDetail(profile: FilterProfile): String = modeDetail(FilterMode.forProfile(profile))
 
     /**
      * The effective state, in the order the user needs it: a download in progress → whether
@@ -191,27 +207,59 @@ object FilterPresentation {
     }
 
     /**
-     * The outcome of the most recent attempt for the active tier's list.
+     * The outcome of the most recent attempt for the sources in effect.
      *
      * A failure always says the previous list is still in use, because that is what the updater
-     * guarantees and a user must never read a failed update as "no protection".
+     * guarantees and a user must never read a failed update as "no protection". With several sources
+     * in custom mode, the first failure's short reason is enough; the per-source rows above carry the
+     * rest.
      */
     fun updateResultLabel(status: FilterStatus, now: Long): String {
-        val main = status.subscriptions
-            .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
-            ?: return "尚未設定主要清單。"
-        return when (main.state) {
-            SubscriptionState.NOT_READY -> "尚未下載清單。"
-            SubscriptionState.DISABLED -> "此清單已停用。"
-            // A ready list normally has a timestamp; without one, saying "success" alone is still
-            // true, while interpolating the "never" label would contradict itself.
-            SubscriptionState.READY -> main.lastSuccessAtMillis
-                ?.let { "上次更新成功（${lastSuccessLabel(it, now)}）。" }
-                ?: "上次更新成功。"
-            SubscriptionState.FAILED ->
-                "上次更新失敗" +
-                    (main.lastError?.let { "（$it）" } ?: "") +
-                    "；仍使用上一次成功的清單。"
+        val sources = status.sourceStatuses.filter { it.enabled }
+        if (sources.isEmpty()) return "目前沒有啟用的過濾來源。"
+
+        val failed = sources.firstOrNull { it.state == SubscriptionState.FAILED }
+        if (failed != null) {
+            return "上次更新失敗" +
+                (failed.lastError?.let { "（$it）" } ?: "") +
+                "；仍使用上一次成功的清單。"
         }
+
+        val notDownloaded = sources.filter { it.state == SubscriptionState.NOT_READY }
+        if (notDownloaded.size == sources.size) return "尚未下載清單。"
+        if (notDownloaded.isNotEmpty()) {
+            val names = notDownloaded.joinToString("、") { it.displayName }
+            return "$names 尚未下載；其他來源仍使用已下載的清單。"
+        }
+
+        val latest = sources.mapNotNull { it.lastSuccessAtMillis }.maxOrNull()
+        return latest?.let { "上次更新成功（${lastSuccessLabel(it, now)}）。" }
+            ?: "上次更新成功。"
     }
+
+    /** The sources in effect, named for the 過濾器管理 heading. */
+    fun activeSourceNames(status: FilterStatus): String {
+        val names = status.sourceStatuses.filter { it.enabled }.map { it.displayName }
+        return if (names.isEmpty()) "目前沒有啟用的過濾來源。" else names.joinToString("、")
+    }
+
+    /** One active source's own state, so a multi-source list cannot hide a pending download. */
+    fun sourceStatusLabel(source: FilterSourceStatus, now: Long): String = when (source.state) {
+        SubscriptionState.NOT_READY -> "尚未下載"
+        SubscriptionState.DISABLED -> "已停用"
+        SubscriptionState.READY -> when {
+            source.ruleCount <= 0 -> "沒有可用規則"
+            source.lastSuccessAtMillis == null -> "已下載 ${source.ruleCount} 條"
+            else -> "已下載 ${source.ruleCount} 條・${lastSuccessLabel(source.lastSuccessAtMillis, now)}"
+        }
+
+        SubscriptionState.FAILED ->
+            "上次更新失敗" +
+                (source.lastError?.let { "（$it）" } ?: "") +
+                "；仍使用上一次成功的清單"
+    }
+
+    /** Attribution line for a source row; null for a legacy user source with no maintainer. */
+    fun maintainerLabel(source: FilterSource): String =
+        "維護者：${source.maintainer}・${source.maintainerHome}"
 }

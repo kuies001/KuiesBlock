@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tw.kuies.block.filter.FilterAssembler
 import tw.kuies.block.filter.FilterCoordinator
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterRepository
 import tw.kuies.block.filter.FilterSettings
@@ -71,7 +72,7 @@ class FilterCoordinatorTest {
     )
 
     @Test
-    fun aManualBlockRuleReachesTheSnapshotWithoutDownloading() {
+    fun aManualBlockRuleIsStoredButNoLongerReachesTheSnapshot() {
         source.body = "||ads.example^\n"
         val coordinator = coordinator()
         coordinator.selectStrength(FilterProfile.STANDARD)
@@ -81,27 +82,31 @@ class FilterCoordinatorTest {
         coordinator.addManualBlock(ManualRule("Tracker.Example", MatchScope.SUBDOMAIN)) { seen.add(it) }
 
         assertEquals("a manual rule must never trigger a download", downloads, source.requests.size)
-        assertEquals(1, repository.snapshot().userRuleCount)
-        assertEquals(1, seen.last().manualRuleCount)
+        assertEquals("the removed editor must not leave hidden rules active", 0, repository.snapshot().userRuleCount)
+        assertEquals(0, seen.last().manualRuleCount)
+        assertEquals(1, store.load().manualBlock.size)
     }
 
     @Test
-    fun aManualRuleSurvivesARestartAndCanBeRemoved() {
+    fun aStoredManualRuleSurvivesARestartWithoutAffectingTheSnapshot() {
         val coordinator = coordinator()
         coordinator.selectStrength(FilterProfile.STANDARD)
         coordinator.addManualAllow(ManualRule("ads.example", MatchScope.EXACT))
 
         // A second coordinator reads the persisted settings, as a restart would.
-        assertEquals(1, coordinator().publishCurrent().manualRuleCount)
+        coordinator().publishCurrent()
+
+        assertEquals(1, store.load().manualAllow.size)
+        assertEquals(0, repository.snapshot().userRuleCount)
 
         coordinator.removeManualAllow("ADS.example")
-        assertEquals(0, repository.snapshot().userRuleCount)
+        assertEquals(0, store.load().manualAllow.size)
     }
 
     @Test
     fun aCustomSourceContributesNothingUntilItIsDownloaded() {
         val coordinator = coordinator()
-        coordinator.selectStrength(FilterProfile.STANDARD)
+        coordinator.selectMode(FilterMode.CUSTOM)
         val baseline = repository.snapshot().subscriptionRuleCount
 
         coordinator.addSubscription(customSource)
@@ -114,7 +119,7 @@ class FilterCoordinatorTest {
     fun updatingACustomSourcePublishesItsRulesAndDisablingRemovesThemAgain() {
         source.body = "||builtin.example^\n"
         val coordinator = coordinator()
-        coordinator.selectStrength(FilterProfile.STANDARD)
+        coordinator.selectMode(FilterMode.CUSTOM)
         val baseline = repository.snapshot().subscriptionRuleCount
         // The custom source downloads a *different* list: two sources contributing the same domain
         // would collapse into one published rule, and the counts would then say nothing about the
@@ -140,7 +145,7 @@ class FilterCoordinatorTest {
     fun removingACustomSourceDeletesItsStoredListAndItsRules() {
         source.body = "||builtin.example^\n"
         val coordinator = coordinator()
-        coordinator.selectStrength(FilterProfile.STANDARD)
+        coordinator.selectMode(FilterMode.CUSTOM)
         val baseline = repository.snapshot().subscriptionRuleCount
         source.body = "||custom.example^\n"
         coordinator.addSubscription(customSource)

@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tw.kuies.block.filter.FilterAssembler
 import tw.kuies.block.filter.FilterDecision
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterRepository
 import tw.kuies.block.filter.FilterSettings
@@ -88,7 +89,9 @@ class SubscriptionUpdaterTest {
 
     /** The settings as the app would hold them after an update result. */
     private fun stored(subscription: FilterSubscription): FilterSettings =
-        FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(subscription)
+        FilterSettings.forProfile(FilterProfile.STANDARD)
+            .withMode(FilterMode.CUSTOM)
+            .withSubscription(subscription)
 
     @Test
     fun aSuccessfulUpdateStoresTheListAndItsBookkeeping() {
@@ -369,7 +372,7 @@ class SubscriptionUpdaterTest {
         assertEquals(FilterProfile.STANDARD.primaryUrl, seen.single().url)
         assertEquals("\"v9\"", seen.single().etag)
         assertEquals(
-            setOf("cdn.jsdelivr.net", "raw.githubusercontent.com"),
+            setOf("cdn.jsdelivr.net"),
             seen.single().allowedHosts
         )
     }
