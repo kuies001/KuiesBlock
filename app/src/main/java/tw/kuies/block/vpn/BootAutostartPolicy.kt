@@ -41,6 +41,18 @@ object BootAutostartPolicy {
         SKIP_OTHER_VPN_UNKNOWN
     }
 
+    /**
+     * Whether a restart may start protection.
+     *
+     * [alwaysOnVpn] is deliberately the weakest input, and a caller must not assume it can be known at
+     * all. `VpnService.isAlwaysOn()` is an **instance** method, so the boot receiver — which decides
+     * before any VpnService exists — has to read `Settings.Secure.always_on_vpn_app` instead, and on the
+     * SM-F7660 that read never reported this app across two reboots while the setting really did name it
+     * (measured 2026-10-17). The gate stays because it is correct whenever the read works, but the
+     * practical double-start guard is [serviceRunning]: the platform's own always-on start brings the
+     * service up first, so this app then finds the tunnel already running and skips — which is what the
+     * device showed, with no second tunnel, no retry and no crash.
+     */
     fun decide(
         preferenceEnabled: Boolean,
         authorizationGranted: Boolean,

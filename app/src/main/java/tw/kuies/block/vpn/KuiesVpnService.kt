@@ -215,6 +215,13 @@ class KuiesVpnService : VpnService() {
     private fun startProtection() {
         running = true
         isRunning = true
+        // The authoritative answer to "did the system's Always-on VPN start this tunnel?", which the boot
+        // receiver cannot obtain: `isAlwaysOn()` is an instance method, so it only exists once a
+        // VpnService does. Unconditional on purpose — one of the few intentional informational lines,
+        // like the activation one, and it carries a boolean rather than anything about the user.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Log.i(TAG, "Protection starting; alwaysOn=${isAlwaysOn()}")
+        }
         // One generation per start attempt: async results tagged with an older one are discarded.
         tunnelGeneration++
         val timeline = StartupTimeline { SystemClock.elapsedRealtime() }
