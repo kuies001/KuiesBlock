@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -20,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +42,9 @@ import tw.kuies.block.filter.FilterSubscription
 import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.UpdateInterval
+import tw.kuies.block.update.ReleaseInfo
+import tw.kuies.block.update.UpdateCheckOutcome
+import tw.kuies.block.update.UpdatePresentation
 
 /**
  * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
@@ -85,6 +91,16 @@ fun SettingsScreen(
     onRunDnsDiagnostics: () -> Unit,
     /** Shows the two-page first-run guide again. Records nothing and changes no setting. */
     onReplayGuide: () -> Unit,
+    /** The app-update check: what the last one found, or null before the first one. */
+    appUpdate: UpdateCheckOutcome?,
+    /** Whether a lookup is running now, which the button shows and disables itself for. */
+    appUpdateChecking: Boolean,
+    /** The release to offer in the update dialog, or null when there is nothing to show. */
+    pendingUpdate: ReleaseInfo?,
+    onCheckAppUpdate: () -> Unit,
+    onDismissUpdateDialog: () -> Unit,
+    /** Opens [String], which the caller validates again before it ever reaches the browser. */
+    onOpenReleasePage: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -151,6 +167,22 @@ fun SettingsScreen(
         GuideSection(onReplayGuide = onReplayGuide)
         PrivacySection()
         AboutSection(appVersion = appVersion)
+        // Deliberately the last item on the page: checking for a new version is the least frequent
+        // thing a user needs, and it must not push the protections and the lists above it out of reach.
+        AppUpdateSection(
+            currentVersion = appVersion,
+            checking = appUpdateChecking,
+            outcome = appUpdate,
+            onCheck = onCheckAppUpdate
+        )
+    }
+    pendingUpdate?.let { release ->
+        UpdateAvailableDialog(
+            release = release,
+            currentVersion = appVersion,
+            onDismiss = onDismissUpdateDialog,
+            onOpenRelease = onOpenReleasePage
+        )
     }
 }
 
@@ -422,6 +454,129 @@ private fun AboutSection(appVersion: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+/**
+ * The one place the app's own version is checked against GitHub.
+ *
+ * Deliberately manual and last on the page: it is a lookup the user asks for, never a schedule, and it
+ * shares nothing with the filter-list worker. The version shown here is the same `versionName` the
+ * about section above displays, so the two can never disagree.
+ *
+ * The button carries the whole progress state: it reads 檢查中… and is disabled while a lookup runs, so
+ * a second tap cannot start a parallel request, and it is enabled again in every outcome so a failure
+ * can always be retried by hand.
+ */
+@Composable
+private fun AppUpdateSection(
+    currentVersion: String,
+    checking: Boolean,
+    outcome: UpdateCheckOutcome?,
+    onCheck: () -> Unit
+) {
+    SectionCard(title = stringResource(R.string.settings_update_section)) {
+        Text(
+            text = stringResource(
+                R.string.settings_update_current,
+                UpdatePresentation.versionLabel(currentVersion)
+            ),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        UpdatePresentation.resultLabel(outcome)?.let { result ->
+            Text(
+                text = result,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (UpdatePresentation.isFailure(outcome)) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+        Button(
+            onClick = onCheck,
+            enabled = !checking,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(
+                    if (checking) R.string.settings_update_checking else R.string.settings_update_check
+                )
+            )
+        }
+    }
+}
+
+/**
+ * The offer shown when a newer stable release exists: its version, the installed one, its notes, and
+ * the two answers a user can give.
+ *
+ * 前往下載 is offered only when the release's own address is this project's GitHub page — the address is
+ * data from the network, so [UpdatePresentation.downloadableUrl] vets it — and it opens that page in the
+ * browser. Nothing is downloaded, installed or reconfigured from here: no APK is fetched, no unknown
+ * sources permission is asked for, and the VPN is never touched.
+ */
+@Composable
+private fun UpdateAvailableDialog(
+    release: ReleaseInfo,
+    currentVersion: String,
+    onDismiss: () -> Unit,
+    onOpenRelease: (String) -> Unit
+) {
+    val downloadUrl = UpdatePresentation.downloadableUrl(release)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(
+                    R.string.settings_update_dialog_title,
+                    UpdatePresentation.versionLabel(release.tagName)
+                )
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(
+                        R.string.settings_update_dialog_current,
+                        UpdatePresentation.versionLabel(currentVersion)
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = stringResource(R.string.settings_update_dialog_notes),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = release.notes.ifBlank {
+                        stringResource(R.string.settings_update_dialog_notes_empty)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            if (downloadUrl != null) {
+                Button(onClick = { onOpenRelease(downloadUrl) }) {
+                    Text(stringResource(R.string.settings_update_dialog_download))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_update_dialog_later))
+            }
+        }
+    )
 }
 
 @Composable

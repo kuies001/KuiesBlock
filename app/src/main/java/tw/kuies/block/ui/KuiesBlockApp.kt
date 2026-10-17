@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -50,6 +51,13 @@ import tw.kuies.block.filter.FilterUpdateSchedulePolicy
 import tw.kuies.block.filter.ManualRule
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
+import tw.kuies.block.update.AppVersion
+import tw.kuies.block.update.GitHubReleaseSource
+import tw.kuies.block.update.ReleaseInfo
+import tw.kuies.block.update.ReleasePagePolicy
+import tw.kuies.block.update.UpdateCheckFailure
+import tw.kuies.block.update.UpdateCheckOutcome
+import tw.kuies.block.update.UpdateChecker
 import tw.kuies.block.vpn.AlwaysOnVpnProbe
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.OtherVpnProbe
@@ -75,6 +83,10 @@ fun KuiesBlockApp(
     val updateStore = remember(appContext) { FilterAutoUpdateStore(appContext) }
     val protectionIntentStore = remember(appContext) { ProtectionIntentStore(appContext) }
     val updateScheduler = remember(appContext) { WorkManagerPeriodicUpdateScheduler(appContext) }
+    // The app-update check owns its own client and has no schedule at all, so it shares neither the
+    // filter-list worker nor its bounds: see GitHubReleaseSource.
+    val updateSource = remember(appContext) { GitHubReleaseSource.create() }
+    val updateChecker = remember(appContext) { UpdateChecker(updateSource, AppVersion.parse(appVersion)) }
     val executor = remember { Executors.newSingleThreadExecutor() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
@@ -131,6 +143,13 @@ fun KuiesBlockApp(
     var bootAutostart by remember { mutableStateOf(false) }
     var alwaysOnVpn by remember { mutableStateOf(false) }
 
+    // The manual app-update check: whether one is running, what the last one found, and the release
+    // still being offered in a dialog. Kept in memory only — a check is never stored, never scheduled
+    // and never runs on its own.
+    var updateChecking by remember { mutableStateOf(false) }
+    var updateOutcome by remember { mutableStateOf<UpdateCheckOutcome?>(null) }
+    var pendingUpdate by remember { mutableStateOf<ReleaseInfo?>(null) }
+
     // Private DNS mode as state, not a value read during composition: only a state write can
     // recompose, so reading it at the call site left the strength section describing a mode the user
     // had already changed outside the app.
@@ -151,7 +170,11 @@ fun KuiesBlockApp(
         updateRecord = updateStore.loadRecord()
         bootAutostart = protectionIntentStore.bootAutostartEnabled()
         FilterUpdateSchedulePolicy.apply(storedAutoUpdate, updateScheduler)
-        onDispose { executor.shutdownNow() }
+        onDispose {
+            // The update source built its own client, so its pool and its workers are released here.
+            updateSource.close()
+            executor.shutdownNow()
+        }
     }
 
     /**
@@ -423,6 +446,52 @@ fun KuiesBlockApp(
         }
     }
 
+    /**
+     * Asks GitHub for the latest stable release, once.
+     *
+     * Off the main thread, and behind both this flag and the checker's own guard, so a second tap while
+     * the first is still running neither blocks the screen nor spends another of the rate-limited
+     * requests. The progress flag is cleared in every case — including a failure — so a manual retry is
+     * always possible, and nothing is scheduled: this path is only ever entered by a tap.
+     */
+    fun checkAppUpdate() {
+        if (updateChecking) return
+        updateChecking = true
+        executor.execute {
+            val outcome = runCatching { updateChecker.check() }
+                .getOrElse { UpdateCheckOutcome.Unavailable(UpdateCheckFailure.UNREADABLE) }
+            mainHandler.post {
+                updateChecking = false
+                when (outcome) {
+                    // Another check still owns the state, so it stays exactly as it was.
+                    UpdateCheckOutcome.Busy -> Unit
+                    is UpdateCheckOutcome.UpdateAvailable -> {
+                        updateOutcome = outcome
+                        pendingUpdate = outcome.release
+                    }
+                    else -> updateOutcome = outcome
+                }
+            }
+        }
+    }
+
+    /**
+     * Opens a release page in the user's browser.
+     *
+     * The address is validated again here, at the moment it is used, so nothing that reached the dialog
+     * by any route can open a page other than this project's own GitHub release. Nothing is installed,
+     * downloaded or reconfigured: the app only hands the address to Android's browser, and it never
+     * stops, starts or rebuilds the VPN for this.
+     */
+    fun openAppReleasePage(url: String) {
+        val safe = ReleasePagePolicy.officialUrlOrNull(url) ?: return
+        runCatching {
+            appContext.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(safe)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
     fun onToggleProtection() {
         when (ProtectionStatusHolder.state) {
             ProtectionState.ACTIVE, ProtectionState.STARTING -> {
@@ -579,6 +648,12 @@ fun KuiesBlockApp(
                 guideReplay = true
                 guideVisible = true
             },
+            appUpdate = updateOutcome,
+            appUpdateChecking = updateChecking,
+            pendingUpdate = pendingUpdate,
+            onCheckAppUpdate = { checkAppUpdate() },
+            onDismissUpdateDialog = { pendingUpdate = null },
+            onOpenReleasePage = { url -> openAppReleasePage(url) },
             onBack = { destination = BlockDestination.HOME },
             modifier = modifier
         )

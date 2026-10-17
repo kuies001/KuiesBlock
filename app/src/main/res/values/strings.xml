@@ -46,6 +46,18 @@
     <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。</string>
     <string name="settings_about_section">關於</string>
     <string name="settings_about_version">App 版本</string>
+
+    <!-- 檢查 App 更新：手動查詢 GitHub 最新正式版本，不自動檢查、不自動安裝。 -->
+    <string name="settings_update_section">檢查 App 更新</string>
+    <string name="settings_update_current">目前版本 %1$s</string>
+    <string name="settings_update_check">檢查更新</string>
+    <string name="settings_update_checking">檢查中…</string>
+    <string name="settings_update_dialog_title">發現新版本 %1$s</string>
+    <string name="settings_update_dialog_current">目前版本：%1$s</string>
+    <string name="settings_update_dialog_notes">更新說明</string>
+    <string name="settings_update_dialog_notes_empty">此版本未提供更新說明。</string>
+    <string name="settings_update_dialog_later">稍後再說</string>
+    <string name="settings_update_dialog_download">前往下載</string>
     <string name="settings_filter_section">廣告攔截強度</string>
     <string name="settings_filter_body">本機規則只對經過 KuiesBlock 的 DNS 查詢生效。所選清單由裝置自行下載，App 不內建清單內容。</string>
     <string name="filter_state_label">目前狀態</string>
