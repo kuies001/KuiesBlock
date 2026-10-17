@@ -87,4 +87,27 @@
     <string name="settings_boot_always_on_active">系統的「一律開啟的 VPN」已設為 KuiesBlock，開機後由系統負責恢復。</string>
     <string name="settings_boot_open_vpn_settings">開啟系統 VPN 設定</string>
     <string name="settings_boot_other_vpn">偵測到其他 VPN 正在使用，KuiesBlock 不會搶佔 VPN 位置。</string>
+
+    <!-- 個別 App 防護：預設全部保護，關閉代表該 App 完全略過 VPN。 -->
+    <string name="settings_app_protection_section">個別 App 防護</string>
+    <string name="settings_app_protection_body">預設保護所有 App。可自行選擇不需要防護的 App。</string>
+    <string name="settings_app_protection_excluded">已排除</string>
+    <string name="settings_app_protection_manage">管理個別 App</string>
+    <string name="app_protection_title">個別 App 防護</string>
+    <string name="app_protection_note">預設保護所有 App。關閉開關的 App 會完全略過 KuiesBlock VPN，改用系統網路。</string>
+    <string name="app_protection_excluded_count">已排除 %1$d 個 App</string>
+    <string name="app_protection_search">搜尋 App</string>
+    <string name="app_protection_restore_all">全部恢復防護</string>
+    <string name="app_protection_restore_title">恢復所有 App 防護？</string>
+    <string name="app_protection_restore_body">這會清除所有個別 App 的排除設定，讓所有 App 重新接受 KuiesBlock 防護。</string>
+    <string name="app_protection_restore_confirm">全部恢復</string>
+    <string name="app_protection_cancel">取消</string>
+    <string name="app_protection_loading">讀取已安裝 App…</string>
+    <string name="app_protection_load_failed">無法讀取已安裝 App；既有排除設定仍保留。</string>
+    <string name="app_protection_empty">找不到符合的 App。</string>
+    <string name="app_protection_applying">正在套用個別 App 設定…</string>
+    <string name="app_protection_saved">設定已儲存，將於下次啟用防護時套用。</string>
+    <string name="app_protection_applied">個別 App 設定已套用。</string>
+    <string name="app_protection_failed">新設定未套用，已保留上一份可用的防護設定。</string>
+    <string name="app_protection_not_running">目前防護未啟用；變更會在下次啟用防護時套用。</string>
 </resources>

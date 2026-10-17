@@ -29,8 +29,13 @@ import androidx.lifecycle.LifecycleOwner
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
+import tw.kuies.block.data.AppExclusionApplyResult
+import tw.kuies.block.data.AppExclusionApplyStatus
+import tw.kuies.block.data.AppExclusionStore
 import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
+import tw.kuies.block.data.InstalledApp
+import tw.kuies.block.data.InstalledAppsRepository
 import tw.kuies.block.data.OnboardingGate
 import tw.kuies.block.data.ProtectionIntentStore
 import tw.kuies.block.dns.DnsConfigStore
@@ -67,7 +72,7 @@ import java.util.concurrent.Executors
 
 private const val TAG = "KuiesBlockApp"
 
-private enum class BlockDestination { HOME, SETTINGS }
+private enum class BlockDestination { HOME, SETTINGS, APP_PROTECTION }
 
 @Composable
 fun KuiesBlockApp(
@@ -78,6 +83,7 @@ fun KuiesBlockApp(
     val context = LocalContext.current
     val appContext = context.applicationContext
     val settingsStore = remember(appContext) { AppSettingsStore(appContext) }
+    val appExclusionStore = remember(appContext) { AppExclusionStore(appContext) }
     val dnsStore = remember(appContext) { DnsConfigStore(appContext) }
     val updateStore = remember(appContext) { FilterAutoUpdateStore(appContext) }
     val protectionIntentStore = remember(appContext) { ProtectionIntentStore(appContext) }
@@ -87,6 +93,7 @@ fun KuiesBlockApp(
     val updateSource = remember(appContext) { GitHubReleaseSource.create() }
     val updateChecker = remember(appContext) { UpdateChecker(updateSource, AppVersion.parse(appVersion)) }
     val executor = remember { Executors.newSingleThreadExecutor() }
+    val appListExecutor = remember { Executors.newSingleThreadExecutor() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var destination by remember { mutableStateOf(BlockDestination.HOME) }
@@ -129,6 +136,15 @@ fun KuiesBlockApp(
     // the two must not share one flag and make the screen describe the wrong action.
     var filterUpdating by remember { mutableStateOf(false) }
 
+    // Per-app exclusions are a VPN-scope setting, kept separate from FilterSettings. The list is
+    // loaded only when the management page is opened, off the main thread.
+    var excludedPackages by remember { mutableStateOf(appExclusionStore.load()) }
+    var installedApps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
+    var appsLoading by remember { mutableStateOf(false) }
+    var appsLoadFailed by remember { mutableStateOf(false) }
+    var appProtectionStatus by remember { mutableStateOf(AppProtectionStatus.IDLE) }
+    var appApplyResult by remember { mutableStateOf<AppExclusionApplyResult?>(null) }
+
     // The automatic-update preference and the outcome of its last run, or null until they are read.
     var autoUpdate by remember { mutableStateOf<FilterAutoUpdateSettings?>(null) }
     var updateRecord by remember { mutableStateOf<FilterUpdateRecord?>(null) }
@@ -169,6 +185,39 @@ fun KuiesBlockApp(
             // The update source built its own client, so its pool and its workers are released here.
             updateSource.close()
             executor.shutdownNow()
+            appListExecutor.shutdownNow()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val remove = AppExclusionApplyStatus.addListener { result ->
+            mainHandler.post { appApplyResult = result }
+        }
+        onDispose { remove() }
+    }
+
+    LaunchedEffect(appApplyResult) {
+        when (val result = appApplyResult) {
+            is AppExclusionApplyResult.Applied ->
+                if (result.packages == excludedPackages) {
+                    appProtectionStatus = AppProtectionStatus.APPLIED
+                }
+            is AppExclusionApplyResult.Failed -> appProtectionStatus = AppProtectionStatus.FAILED
+            null -> Unit
+        }
+    }
+
+    LaunchedEffect(destination) {
+        if (destination != BlockDestination.APP_PROTECTION) return@LaunchedEffect
+        appsLoading = true
+        appsLoadFailed = false
+        appListExecutor.execute {
+            val result = InstalledAppsRepository.load(appContext)
+            mainHandler.post {
+                installedApps = result.apps
+                appsLoadFailed = result.failed
+                appsLoading = false
+            }
         }
     }
 
@@ -386,6 +435,46 @@ fun KuiesBlockApp(
     }
 
     /**
+     * Toggles one app's protection.
+     *
+     * The desired set is persisted before any VPN work, so a failed rebuild or a stopped tunnel never
+     * loses the user's choice. A running tunnel is rebuilt through the service's safe teardown/start
+     * path; a stopped tunnel only records the setting for the next start.
+     */
+    fun setAppProtected(packageName: String, protected: Boolean) {
+        if (packageName == appContext.packageName) return
+        val updated = if (protected) {
+            excludedPackages - packageName
+        } else {
+            excludedPackages + packageName
+        }
+        if (updated == excludedPackages) return
+        appExclusionStore.save(updated)
+        excludedPackages = updated
+        appApplyResult = null
+        if (KuiesVpnService.isRunning) {
+            appProtectionStatus = AppProtectionStatus.APPLYING
+            KuiesVpnService.rebuildExclusions(appContext)
+        } else {
+            appProtectionStatus = AppProtectionStatus.SAVED
+        }
+    }
+
+    /** Clears every exclusion; the caller has already shown a confirmation dialog. */
+    fun restoreAllAppProtection() {
+        if (excludedPackages.isEmpty()) return
+        appExclusionStore.clear()
+        excludedPackages = emptySet()
+        appApplyResult = null
+        if (KuiesVpnService.isRunning) {
+            appProtectionStatus = AppProtectionStatus.APPLYING
+            KuiesVpnService.rebuildExclusions(appContext)
+        } else {
+            appProtectionStatus = AppProtectionStatus.SAVED
+        }
+    }
+
+    /**
      * Opens Android's own VPN screen so the user can set Always-on VPN themselves.
      *
      * Nothing is changed from here: the app explains and offers the door, and the system setting stays
@@ -576,6 +665,13 @@ fun KuiesBlockApp(
             onSelectMode = { mode -> selectFilterMode(mode) },
             onUpdateFilterNow = { updateFilterNow() },
             onSetSourceSelected = { source, selected -> selectFilterSource(source, selected) },
+            excludedAppCount = excludedPackages.size,
+            onOpenAppProtection = {
+                if (appProtectionStatus != AppProtectionStatus.APPLYING) {
+                    appProtectionStatus = AppProtectionStatus.IDLE
+                }
+                destination = BlockDestination.APP_PROTECTION
+            },
             autoUpdate = autoUpdate,
             updateRecord = updateRecord,
             onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },
@@ -600,6 +696,21 @@ fun KuiesBlockApp(
             onDismissUpdateDialog = { pendingUpdate = null },
             onOpenReleasePage = { url -> openAppReleasePage(url) },
             onBack = { destination = BlockDestination.HOME },
+            modifier = modifier
+        )
+
+        BlockDestination.APP_PROTECTION -> AppProtectionScreen(
+            apps = installedApps,
+            loading = appsLoading,
+            loadFailed = appsLoadFailed,
+            excludedPackages = excludedPackages,
+            status = appProtectionStatus,
+            protectionRunning = KuiesVpnService.isRunning,
+            onSetProtected = { packageName, protected ->
+                setAppProtected(packageName, protected)
+            },
+            onRestoreAll = { restoreAllAppProtection() },
+            onBack = { destination = BlockDestination.SETTINGS },
             modifier = modifier
         )
     }

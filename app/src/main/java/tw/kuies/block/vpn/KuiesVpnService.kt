@@ -5,6 +5,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
 import android.net.ConnectivityManager
@@ -43,6 +44,8 @@ import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
+import tw.kuies.block.data.AppExclusionApplyStatus
+import tw.kuies.block.data.AppExclusionStore
 import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.dns.DnsConfig
 import tw.kuies.block.dns.DnsConfigStore
@@ -117,6 +120,21 @@ class KuiesVpnService : VpnService() {
 
     private var tunnel: ParcelFileDescriptor? = null
     private var tunnelInput: FileInputStream? = null
+
+    /**
+     * The exclusion set that produced the currently established tunnel.
+     *
+     * Kept for one purpose: if a new set cannot be established, the service can retry the set that
+     * was known to work instead of failing open on the user's first change. Never used as the desired
+     * setting.
+     */
+    @Volatile
+    private var appliedExcludedPackages: Set<String> = emptySet()
+
+    /** A coalesced request to re-establish the tunnel after the user changed app exclusions. */
+    private val exclusionRebuildRunner = Runnable {
+        if (running) restartTunnel()
+    }
 
     // Written on the main thread, read from the reader and worker threads.
     @Volatile
@@ -193,6 +211,15 @@ class KuiesVpnService : VpnService() {
             // Stop must always win, even mid-start: it clears the pending retries and tears down.
             Log.i(TAG, "Explicit stop requested via ACTION_STOP.")
             stopProtectionByUser()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_REBUILD) {
+            // The user changed the per-app exclusions while protection was running. Coalesce bursts,
+            // then rebuild the tunnel; the desired set is read when establish() is about to run.
+            if (running) {
+                mainHandler.removeCallbacks(exclusionRebuildRunner)
+                mainHandler.postDelayed(exclusionRebuildRunner, EXCLUSION_REBUILD_DEBOUNCE_MILLIS)
+            }
             return START_NOT_STICKY
         }
         if (!VpnAuthorization.isGranted(this)) {
@@ -353,7 +380,7 @@ class KuiesVpnService : VpnService() {
         timeline: StartupTimeline
     ) {
         val tunnelStartedAt = SystemClock.elapsedRealtime()
-        val descriptor = establishTunnel(declaration)
+        val descriptor = establishTunnelWithFallback(declaration)
         logStartupDebug("tunnelEstablishMs=${SystemClock.elapsedRealtime() - tunnelStartedAt}")
         if (descriptor == null) {
             requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
@@ -385,7 +412,50 @@ class KuiesVpnService : VpnService() {
         verifyDnsRoundTrip()
     }
 
-    private fun establishTunnel(declaration: TunnelDeclaration): ParcelFileDescriptor? = try {
+    private data class TunnelEstablishResult(
+        val descriptor: ParcelFileDescriptor?,
+        val appliedExclusions: Set<String>
+    )
+
+    /**
+     * Establishes the tunnel with the stored exclusions, and falls back once to the set that was
+     * already working if the new set cannot be established.
+     *
+     * The desired set is read at establish time, not when the user tapped the switch, so a burst of
+     * changes always converges on the latest stored choice. [AppExclusionApplyStatus] reports the
+     * outcome the service actually achieved; a fallback is never reported as a successful apply.
+     */
+    private fun establishTunnelWithFallback(declaration: TunnelDeclaration): ParcelFileDescriptor? {
+        val desired = AppExclusionStore(this).load()
+        val first = establishTunnel(declaration, desired)
+        if (first.descriptor != null) {
+            appliedExcludedPackages = first.appliedExclusions
+            // Report the user's desired set as applied even when an uninstalled entry had to be
+            // skipped; the stored choice will apply again if that package is reinstalled.
+            AppExclusionApplyStatus.applied(desired)
+            return first.descriptor
+        }
+
+        val previous = appliedExcludedPackages
+        if (desired != previous) {
+            Log.w(TAG, "New per-app exclusions could not be established; retrying the previous set.")
+            val fallback = establishTunnel(declaration, previous)
+            if (fallback.descriptor != null) {
+                appliedExcludedPackages = fallback.appliedExclusions
+                AppExclusionApplyStatus.failed(desired, fallback.appliedExclusions)
+                return fallback.descriptor
+            }
+        }
+
+        AppExclusionApplyStatus.failed(desired, previous)
+        return null
+    }
+
+    private fun establishTunnel(
+        declaration: TunnelDeclaration,
+        exclusions: Set<String>
+    ): TunnelEstablishResult {
+        return try {
         val builder = Builder()
             .setSession(getString(R.string.app_name))
             .setMtu(declaration.mtu)
@@ -399,10 +469,28 @@ class KuiesVpnService : VpnService() {
             // Restrict the tunnel to IPv4 so IPv6 can never be captured without a path to forward it.
             builder.allowFamily(OsConstants.AF_INET)
         }
-        builder.establish()
-    } catch (exception: Exception) {
-        Log.e(TAG, "establish() failed: ${exception.javaClass.simpleName}")
-        null
+        val applied = LinkedHashSet<String>(exclusions.size)
+        for (packageName in exclusions) {
+            if (packageName == this.packageName) continue
+            try {
+                builder.addDisallowedApplication(packageName)
+                applied.add(packageName)
+            } catch (_: PackageManager.NameNotFoundException) {
+                // The app was uninstalled between selection and a later tunnel start. Its stored
+                // choice is kept so reinstalling the same package can restore it.
+                Log.w(TAG, "Skipping an excluded app that is not installed.")
+            } catch (exception: Exception) {
+                // A package the platform refuses must not be silently presented as excluded. Abort
+                // this attempt so the caller can restore the previous working set instead.
+                Log.w(TAG, "The platform rejected an excluded app: ${exception.javaClass.simpleName}")
+                return TunnelEstablishResult(null, applied)
+            }
+        }
+        TunnelEstablishResult(builder.establish(), applied)
+        } catch (exception: Exception) {
+            Log.e(TAG, "establish() failed: ${exception.javaClass.simpleName}")
+            TunnelEstablishResult(null, emptySet())
+        }
     }
 
     private fun createTransport(dnsServers: List<InetSocketAddress>): DohTransport? {
@@ -1083,6 +1171,8 @@ class KuiesVpnService : VpnService() {
         private const val TAG = "KuiesVpnService"
         const val ACTION_START = "tw.kuies.block.action.VPN_START"
         const val ACTION_STOP = "tw.kuies.block.action.VPN_STOP"
+        const val ACTION_REBUILD = "tw.kuies.block.action.VPN_REBUILD"
+        private const val EXCLUSION_REBUILD_DEBOUNCE_MILLIS = 250L
         private const val DEFAULT_MTU = 1500
         private const val FAILURE_THRESHOLD = 5
         private const val PROBE_ATTEMPTS = 3
@@ -1135,6 +1225,21 @@ class KuiesVpnService : VpnService() {
                 Log.w(TAG, "Could not send ACTION_STOP via startForegroundService: ${exception.message}")
             }
             context.stopService(Intent(context, KuiesVpnService::class.java))
+        }
+
+        /**
+         * Re-establishes a running tunnel with the currently stored app exclusions.
+         *
+         * A no-op when protection is not running: a saved change must never start the VPN by itself.
+         * The service coalesces bursts and always reads the latest stored set at establish time.
+         */
+        fun rebuildExclusions(context: Context) {
+            val intent = Intent(context, KuiesVpnService::class.java).setAction(ACTION_REBUILD)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (exception: Exception) {
+                Log.w(TAG, "Could not send ACTION_REBUILD via startForegroundService: ${exception.message}")
+            }
         }
     }
 }

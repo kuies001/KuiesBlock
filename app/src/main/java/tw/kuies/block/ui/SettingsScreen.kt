@@ -72,6 +72,9 @@ fun SettingsScreen(
     onUpdateFilterNow: () -> Unit,
     /** Turns one custom-mode source on or off; the last selected source cannot be removed. */
     onSetSourceSelected: (FilterSource, Boolean) -> Unit,
+    /** How many packages currently bypass the tunnel, shown as the entry point to the app list. */
+    excludedAppCount: Int,
+    onOpenAppProtection: () -> Unit,
     /** The automatic-update preference and the outcome of its last run, or null until they are read. */
     autoUpdate: FilterAutoUpdateSettings?,
     updateRecord: FilterUpdateRecord?,
@@ -125,6 +128,10 @@ fun SettingsScreen(
             onUpdateNow = onUpdateFilterNow,
             onSetAutoUpdateEnabled = onSetAutoUpdateEnabled,
             onSetUpdateInterval = onSetUpdateInterval
+        )
+        AppProtectionSection(
+            excludedCount = excludedAppCount,
+            onOpen = onOpenAppProtection
         )
         BootAutostartSection(
             enabled = bootAutostartEnabled,
@@ -502,6 +509,36 @@ private fun SettingsHeader(onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
+    }
+}
+
+/**
+ * The entry point to the independent per-app page.
+ *
+ * It shows the count even when zero, because "all apps protected" is the meaningful default and the
+ * user should be able to confirm it without opening the list.
+ */
+@Composable
+private fun AppProtectionSection(
+    excludedCount: Int,
+    onOpen: () -> Unit
+) {
+    SectionCard(title = stringResource(R.string.settings_app_protection_section)) {
+        Text(
+            text = stringResource(R.string.settings_app_protection_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        LabeledValue(
+            label = stringResource(R.string.settings_app_protection_excluded),
+            value = stringResource(R.string.app_protection_excluded_count, excludedCount)
+        )
+        Button(
+            onClick = onOpen,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.settings_app_protection_manage))
+        }
     }
 }
 

@@ -21,6 +21,17 @@
     <!-- Lets the app be told about a restart so it can offer to restore protection (best effort). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!--
+      The per-app page lists user-visible launcher apps. Query only that intent instead of requesting
+      QUERY_ALL_PACKAGES; apps without a launcher entry are intentionally not offered.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
