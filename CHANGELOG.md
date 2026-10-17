@@ -2,6 +2,35 @@
 
 本專案遵循語意化版本。以下記錄各版本的實際變更。
 
+## v0.4.3
+
+**主題：個別 App 防護**
+
+### 新增
+
+- 設定頁新增「個別 App 防護」入口與獨立管理頁：App 搜尋、已安裝 App 清單、圖示、名稱、
+  Package Name、每個 App 的防護開關、已排除數量與「全部恢復防護」確認。
+- 預設所有 App 都接受 KuiesBlock 防護；可將特定 App 排除，讓它完全略過 KuiesBlock VPN。
+- 新增獨立的 `AppExclusionStore`，以 Package Name 持久化，與 `FilterSettings` 分離。
+- 使用 `VpnService.Builder.addDisallowedApplication`；執行中的 VPN 以 250 ms debounce 重建，
+  新設定建立失敗時回退上一份已套用集合；VPN 未執行時只儲存，下次啟動才套用。
+- Manifest 只查詢 `MAIN/LAUNCHER`，不使用 `QUERY_ALL_PACKAGES`；自身與已解除安裝項目安全處理。
+
+### 變更
+
+- `versionName` → `0.4.3`，`versionCode` → `9`。
+
+### 已知限制（v0.4.3）
+
+- 只列出具有 launcher entry 的 App；沒有 launcher 的 package 不會出現在清單。
+- 排除是 traffic-level：被排除 App 的流量與 DNS 完全不進 VPN，但仍可能受 Android 私人 DNS
+  或其他網路政策影響；這不是逐查詢的 App 歸因。
+- 變更排除設定時，執行中的 VPN 會短暫重建；快速連續變更由 250 ms debounce 合併。
+- 新排除集合建立失敗時會回退上一份可用集合；若仍失敗，VPN 會停止並顯示失敗。
+- 平台拒絕 `establish()` 的完整回退、PackageManager 查詢失敗的 UI、快速切換的 debounce、
+  真正重新開機後的保留，以及第三方 App 自身 DNS 流量，仍維持 `INCONCLUSIVE`。
+- v0.4.2 與之前版本的所有已知限制繼續適用。
+
 ## v0.4.2
 
 **主題：四種廣告攔截模式與預設過濾來源管理**
