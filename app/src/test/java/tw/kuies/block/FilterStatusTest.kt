@@ -10,6 +10,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import tw.kuies.block.filter.FilterAssembler
+import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterRepository
 import tw.kuies.block.filter.FilterSettings
@@ -47,7 +48,7 @@ class FilterStatusTest {
     }
 
     @Test
-    fun theStatusDescribesEverySourceAndWhatIsReallyInEffect() {
+    fun theStatusDescribesStoredSourcesAndWhatIsReallyInEffect() {
         val main = FilterSubscription.forProfile(FilterProfile.STRICT).copy(
             state = SubscriptionState.READY,
             ruleCount = 3,
@@ -96,10 +97,21 @@ class FilterStatusTest {
         assertEquals(1_699_000_000_000L, customStatus.lastSuccessAtMillis ?: 0L)
         assertEquals("network error", customStatus.lastError)
 
-        assertEquals(4, status.subscriptionRuleCount)
-        assertEquals("an unusable manual rule must not be counted", 1, status.manualRuleCount)
-        assertEquals(5, status.effectiveRuleCount)
+        // A preset publishes only its own HaGeZi list, and retired manual rules publish nothing.
+        assertEquals(3, status.subscriptionRuleCount)
+        assertEquals(0, status.manualRuleCount)
+        assertEquals(3, status.effectiveRuleCount)
         assertTrue(status.hasUsableRules)
+        assertEquals(1, status.sourceStatuses.size)
+        assertEquals(main.id, status.sourceStatuses.single().subscriptionId)
+
+        // Custom mode is where the stored user source contributes; its failure still keeps its rules.
+        val customSettings = settings.withMode(FilterMode.CUSTOM)
+        val customModeStatus = FilterStatus.of(customSettings, assembler.assemble(customSettings))
+        assertEquals(4, customModeStatus.subscriptionRuleCount)
+        assertEquals(0, customModeStatus.manualRuleCount)
+        assertEquals(4, customModeStatus.effectiveRuleCount)
+        assertEquals(2, customModeStatus.sourceStatuses.size)
     }
 
     @Test
@@ -117,15 +129,16 @@ class FilterStatusTest {
     }
 
     @Test
-    fun manualRulesAloneStillCountAsUsable() {
+    fun storedManualRulesAloneAreNoLongerUsable() {
         val settings = FilterSettings.forProfile(FilterProfile.STANDARD)
             .withManualBlock(listOf(ManualRule("blocked.example", MatchScope.SUBDOMAIN)))
 
         val status = FilterStatus.of(settings, assembler.assemble(settings))
 
         assertEquals(0, status.subscriptionRuleCount)
-        assertEquals(1, status.manualRuleCount)
-        assertEquals(1, status.effectiveRuleCount)
-        assertTrue(status.hasUsableRules)
+        assertEquals(0, status.manualRuleCount)
+        assertEquals(0, status.effectiveRuleCount)
+        assertFalse("manual rules stay stored but no longer publish", status.hasUsableRules)
+        assertEquals(1, settings.manualBlock.size)
     }
 }
