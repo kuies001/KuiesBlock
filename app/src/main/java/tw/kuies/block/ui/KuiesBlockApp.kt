@@ -98,6 +98,10 @@ fun KuiesBlockApp(
 
     var destination by remember { mutableStateOf(BlockDestination.HOME) }
 
+    // The per-app page is reachable from home and from no other screen now, but keeping the return
+    // destination explicit means a later entry point cannot strand the back arrow on the wrong page.
+    var appProtectionReturnTo by remember { mutableStateOf(BlockDestination.HOME) }
+
     // The first-run decision is made once, from what is already stored, and before this session
     // writes anything of its own: `syncEnvironment()` records the platform's authorization answer on
     // the first resume, so asking later would make every install look used. The guide is only for a
@@ -646,6 +650,13 @@ fun KuiesBlockApp(
             protectionError = protectionError,
             isServiceRunning = KuiesVpnService.isRunning,
             onToggleProtection = { onToggleProtection() },
+            onOpenAppProtection = {
+                appProtectionReturnTo = BlockDestination.HOME
+                if (appProtectionStatus != AppProtectionStatus.APPLYING) {
+                    appProtectionStatus = AppProtectionStatus.IDLE
+                }
+                destination = BlockDestination.APP_PROTECTION
+            },
             onOpenSettings = { destination = BlockDestination.SETTINGS },
             modifier = modifier
         )
@@ -665,13 +676,6 @@ fun KuiesBlockApp(
             onSelectMode = { mode -> selectFilterMode(mode) },
             onUpdateFilterNow = { updateFilterNow() },
             onSetSourceSelected = { source, selected -> selectFilterSource(source, selected) },
-            excludedAppCount = excludedPackages.size,
-            onOpenAppProtection = {
-                if (appProtectionStatus != AppProtectionStatus.APPLYING) {
-                    appProtectionStatus = AppProtectionStatus.IDLE
-                }
-                destination = BlockDestination.APP_PROTECTION
-            },
             autoUpdate = autoUpdate,
             updateRecord = updateRecord,
             onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },

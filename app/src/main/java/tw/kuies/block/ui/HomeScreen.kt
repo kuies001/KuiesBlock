@@ -35,7 +35,7 @@ import tw.kuies.block.core.ProtectionState
 
 /**
  * The whole home screen: the app name, the shield, the protection status, the one button that
- * turns protection on or off, and a short card of plain-language benefits.
+ * turns protection on or off, the per-app entry and a short card of plain-language benefits.
  *
  * Kept deliberately free of network detail. It shows no host name, no endpoint, no transport and
  * no counters — that is internal, and a plain user only needs to know whether protection is on. A
@@ -52,6 +52,7 @@ fun HomeScreen(
     protectionError: ProtectionError?,
     isServiceRunning: Boolean = false,
     onToggleProtection: () -> Unit,
+    onOpenAppProtection: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -71,6 +72,8 @@ fun HomeScreen(
             isServiceRunning = isServiceRunning,
             onToggleProtection = onToggleProtection
         )
+
+        AppProtectionEntry(onOpen = onOpenAppProtection)
 
         BenefitsCard()
     }
@@ -225,7 +228,57 @@ private fun ErrorExplanation(error: ProtectionError?) {
 }
 
 /**
+ * The way into the per-app page, placed on home because that is where a user looks for it.
+ *
+ * It is a single tappable row, not a control: the switches live on the page it opens, so nothing here
+ * can change an exclusion by accident. The count is not shown — the page states it — which keeps this
+ * entry to one line of purpose.
+ */
+@Composable
+private fun AppProtectionEntry(onOpen: () -> Unit) {
+    Card(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.home_app_settings_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = stringResource(R.string.home_app_settings_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron_right),
+                // Decorative: the whole row is the target and its title names the destination.
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/**
  * Why it is worth keeping protection on, under the status card.
+ *
+ * There is no heading: the two rows say what they mean on their own, and a title only repeated them.
  *
  * The copy stays modest on purpose: a DNS-level filter can cut down ad loading, but it cannot catch
  * every ad an app serves itself, so the two lines describe a possible saving instead of promising a
@@ -245,11 +298,6 @@ private fun BenefitsCard() {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = stringResource(R.string.home_benefits_title),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
             BenefitRow(
                 iconRes = R.drawable.ic_block,
                 title = stringResource(R.string.home_benefit_blocking_title),

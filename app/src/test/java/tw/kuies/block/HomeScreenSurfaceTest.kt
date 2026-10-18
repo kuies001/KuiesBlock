@@ -80,19 +80,36 @@ class HomeScreenSurfaceTest {
 
     /**
      * The benefits block is drawn from its own strings and one icon per row, so a row cannot lose its
-     * title, its explanation or its icon without this failing.
+     * title, its explanation or its icon without this failing. It has no heading of its own.
      */
     @Test
     fun theHomeScreenRendersBothBenefitRowsWithTheirOwnIcon() {
         val source = homeScreenSource()
         val required = listOf(
-            "R.string.home_benefits_title",
             "R.string.home_benefit_blocking_title",
             "R.string.home_benefit_blocking_body",
             "R.string.home_benefit_free_title",
             "R.string.home_benefit_free_body",
             "R.drawable.ic_block",
             "R.drawable.ic_check_circle"
+        )
+        required.forEach { token ->
+            assertTrue("HomeScreen.kt should render $token", source.contains(token))
+        }
+    }
+
+    /**
+     * ... and the per-app page is reachable from home itself, with the exact title and explanation
+     * the requirement names, rather than only from settings.
+     */
+    @Test
+    fun theHomeScreenOffersThePerAppEntry() {
+        val source = homeScreenSource()
+        val required = listOf(
+            "R.string.home_app_settings_title",
+            "R.string.home_app_settings_body",
+            "R.drawable.ic_chevron_right",
+            "onOpenAppProtection"
         )
         required.forEach { token ->
             assertTrue("HomeScreen.kt should render $token", source.contains(token))

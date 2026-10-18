@@ -6,18 +6,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
- * Copy guard for the home screen's "使用 KuiesBlock 的好處" block.
+ * Copy guard for the home screen's benefits block.
  *
  * The wording is a product decision: the block may describe a possible benefit, but it must not
  * promise one. A DNS-level filter cannot catch every ad an app serves itself, and nothing about the
  * power or data saving has been measured on a device, so the copy may not claim a guaranteed saving,
  * a percentage, or an ad-free experience. Pinning the approved text here keeps a later edit from
- * quietly turning a hedge back into a promise.
+ * quietly turning a hedge back into a promise. The block has no heading of its own since v0.4.4.
  */
 class HomeBenefitsCopyTest {
 
     private val approved = mapOf(
-        "home_benefits_title" to "使用 KuiesBlock 的好處",
         "home_benefit_blocking_title" to "阻擋廣告",
         "home_benefit_blocking_body" to "減少廣告載入，有助節省流量與降低耗電。",
         "home_benefit_free_title" to "輕量・永久免費",
