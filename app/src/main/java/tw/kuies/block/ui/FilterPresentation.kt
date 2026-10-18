@@ -1,9 +1,9 @@
 package tw.kuies.block.ui
 
+import java.util.Locale
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.dns.PrivateDnsMode
-import tw.kuies.block.filter.BuiltInFilterAttribution
 import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterProfile
 import tw.kuies.block.filter.FilterSource
@@ -146,33 +146,10 @@ object FilterPresentation {
         }
     }
 
-    /** Who maintains the built-in lists. The app ships URLs and attribution only, never the lists. */
-    const val MAINTAINER = "HaGeZi"
-
-    /** The maintainer's project page, for the attribution the GPL-3.0 lists require. */
-    const val MAINTAINER_HOME = BuiltInFilterAttribution.HOME_PAGE
-
     /** The licence, and the fact that follows from it: the content is fetched on the device. */
     const val LICENCE = "清單授權：GNU GPL-3.0（App 不內建清單內容，於裝置端下載）"
 
-    /** The active tier's main list, as the filter-management section must name it. */
-    fun mainListName(status: FilterStatus): String = status.profileListName
-
     fun sourceEnabledLabel(enabled: Boolean): String = if (enabled) "已啟用" else "已停用"
-
-    /**
-     * The built-in main list's own state, for the 過濾器管理 row.
-     *
-     * Deliberately the list's own flag and **not** [FilterStatus.enabled]: that is the local filter's
-     * master value, which no screen can switch any more (it is always configured), so showing it here
-     * described the whole filter with one source's label. The row is about this list only.
-     */
-    fun mainListEnabledLabel(status: FilterStatus): String =
-        sourceEnabledLabel(
-            status.subscriptions
-                .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
-                ?.enabled == true
-        )
 
     /**
      * How many rules the engine can match right now.
@@ -180,11 +157,11 @@ object FilterPresentation {
      * Reports the published snapshot, never what a list merely contains: a source whose rules are
      * not in effect must not read as though they were.
      */
-    fun effectiveRulesLabel(status: FilterStatus): String =
+    fun effectiveRuleCountLabel(status: FilterStatus): String =
         if (status.effectiveRuleCount > 0) {
-            "目前生效規則：${status.effectiveRuleCount} 條"
+            "${"%,d".format(Locale.US, status.effectiveRuleCount)} 條"
         } else {
-            "目前沒有生效中的規則"
+            "尚未生效"
         }
 
     /**
@@ -207,59 +184,46 @@ object FilterPresentation {
     }
 
     /**
-     * The outcome of the most recent attempt for the sources in effect.
+     * The last successful update across the sources in effect.
      *
-     * A failure always says the previous list is still in use, because that is what the updater
-     * guarantees and a user must never read a failed update as "no protection". With several sources
-     * in custom mode, the first failure's short reason is enough; the per-source rows above carry the
-     * rest.
+     * Only [FilterSourceStatus.lastSuccessAtMillis] counts, and the updater writes that after a real
+     * success — so a failed attempt can never make this line look freshly updated. A downloaded list
+     * whose time was never recorded says so rather than guessing.
      */
-    fun updateResultLabel(status: FilterStatus, now: Long): String {
+    fun lastUpdateLabel(status: FilterStatus, now: Long): String {
         val sources = status.sourceStatuses.filter { it.enabled }
         if (sources.isEmpty()) return "目前沒有啟用的過濾來源。"
-
-        val failed = sources.firstOrNull { it.state == SubscriptionState.FAILED }
-        if (failed != null) {
-            return "上次更新失敗" +
-                (failed.lastError?.let { "（$it）" } ?: "") +
-                "；仍使用上一次成功的清單。"
-        }
-
-        val notDownloaded = sources.filter { it.state == SubscriptionState.NOT_READY }
-        if (notDownloaded.size == sources.size) return "尚未下載清單。"
-        if (notDownloaded.isNotEmpty()) {
-            val names = notDownloaded.joinToString("、") { it.displayName }
-            return "$names 尚未下載；其他來源仍使用已下載的清單。"
-        }
-
         val latest = sources.mapNotNull { it.lastSuccessAtMillis }.maxOrNull()
-        return latest?.let { "上次更新成功（${lastSuccessLabel(it, now)}）。" }
-            ?: "上次更新成功。"
+        if (latest != null) return lastSuccessLabel(latest, now)
+        return if (sources.any { it.ruleCount > 0 }) "尚未記錄更新時間" else "尚未下載"
     }
 
-    /** The sources in effect, named for the 過濾器管理 heading. */
-    fun activeSourceNames(status: FilterStatus): String {
-        val names = status.sourceStatuses.filter { it.enabled }.map { it.displayName }
-        return if (names.isEmpty()) "目前沒有啟用的過濾來源。" else names.joinToString("、")
-    }
-
-    /** One active source's own state, so a multi-source list cannot hide a pending download. */
-    fun sourceStatusLabel(source: FilterSourceStatus, now: Long): String = when (source.state) {
+    /**
+     * A short problem line for one source, or null when there is nothing wrong to report.
+     *
+     * A failed update keeps the previous rules in use, so the line says that instead of implying the
+     * source is gone; 尚未下載 and 沒有可用規則 keep an empty source from looking ready.
+     */
+    fun sourceIssueLabel(source: FilterSourceStatus): String? = when (source.state) {
         SubscriptionState.NOT_READY -> "尚未下載"
-        SubscriptionState.DISABLED -> "已停用"
-        SubscriptionState.READY -> when {
-            source.ruleCount <= 0 -> "沒有可用規則"
-            source.lastSuccessAtMillis == null -> "已下載 ${source.ruleCount} 條"
-            else -> "已下載 ${source.ruleCount} 條・${lastSuccessLabel(source.lastSuccessAtMillis, now)}"
-        }
-
+        SubscriptionState.DISABLED -> null
+        SubscriptionState.READY -> if (source.ruleCount <= 0) "沒有可用規則" else null
         SubscriptionState.FAILED ->
-            "上次更新失敗" +
+            "更新失敗" +
                 (source.lastError?.let { "（$it）" } ?: "") +
-                "；仍使用上一次成功的清單"
+                "；仍使用上次成功的清單"
     }
 
-    /** Attribution line for a source row; null for a legacy user source with no maintainer. */
-    fun maintainerLabel(source: FilterSource): String =
-        "維護者：${source.maintainer}・${source.maintainerHome}"
+    /** Whether [sourceIssueLabel] describes a failure rather than a not-yet-downloaded source. */
+    fun sourceIssueIsError(source: FilterSourceStatus): Boolean =
+        source.state == SubscriptionState.FAILED
+
+    /** The maintainers whose lists are in effect, for the compact attribution line. */
+    fun sourceAttributionLabel(status: FilterStatus): String? {
+        val maintainers = status.sourceStatuses
+            .filter { it.enabled }
+            .mapNotNull { source -> FilterSource.fromId(source.id)?.maintainer ?: source.maintainer }
+            .distinct()
+        return maintainers.takeIf { it.isNotEmpty() }?.joinToString("、", prefix = "來源：")
+    }
 }

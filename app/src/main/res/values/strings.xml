@@ -41,18 +41,12 @@
     <string name="settings_guide_section">使用教學</string>
     <string name="settings_guide_body">第一次使用的兩個步驟：授權 VPN、開啟防護。隨時可以再回來看一次，不會改變任何設定。</string>
     <string name="action_replay_guide">重新觀看使用教學</string>
-    <string name="settings_diagnostics_section">連線診斷</string>
-    <string name="action_run_dns_diagnostics">執行 DNS 診斷</string>
-    <string name="settings_diagnostic_result">診斷結果</string>
-    <string name="settings_diagnostic_probe">• %1$s：%2$s</string>
     <string name="settings_privacy_section">隱私</string>
     <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。</string>
     <string name="settings_about_section">關於</string>
-    <string name="settings_about_version">App 版本</string>
 
     <!-- 檢查 App 更新：手動查詢 GitHub 最新正式版本，不自動檢查、不自動安裝。 -->
-    <string name="settings_update_section">檢查 App 更新</string>
-    <string name="settings_update_current">目前版本 %1$s</string>
+    <string name="settings_update_current">目前版本：%1$s</string>
     <string name="settings_update_check">檢查更新</string>
     <string name="settings_update_checking">檢查中…</string>
     <string name="settings_update_dialog_title">發現新版本 %1$s</string>
@@ -62,31 +56,29 @@
     <string name="settings_update_dialog_later">稍後再說</string>
     <string name="settings_update_dialog_download">前往下載</string>
     <string name="settings_filter_section">廣告攔截強度</string>
-    <string name="settings_filter_body">本機規則只對經過 KuiesBlock 的 DNS 查詢生效。所選清單由裝置自行下載，App 不內建清單內容。</string>
+    <string name="settings_filter_body">只影響經由 KuiesBlock 的 DNS 查詢，其他流量不受影響。</string>
     <string name="filter_custom_sources_title">自訂過濾來源</string>
     <string name="filter_custom_sources_body">HaGeZi Multi 主清單只能擇一；其他來源可同時啟用。至少保留一個來源。</string>
     <string name="filter_state_label">目前狀態</string>
     <string name="filter_state_label_loading">讀取中…</string>
     <string name="settings_filter_sources_section">過濾器管理</string>
-    <string name="filter_source_active_sources">目前有效的過濾來源</string>
-    <string name="filter_source_enabled">狀態</string>
+    <string name="filter_source_none_active">目前沒有啟用的過濾來源。</string>
     <string name="filter_source_rules">生效規則</string>
-    <string name="filter_source_last_update">最近一次更新</string>
+    <string name="filter_source_last_update">最後更新</string>
     <string name="filter_source_update_now">立即更新</string>
     <string name="filter_source_updating">更新中…</string>
 
     <!-- 自動更新只處理「已下載過」的清單，且系統可能延後執行，文案必須照實說。 -->
-    <string name="filter_auto_update_title">自動更新過濾規則</string>
-    <string name="filter_auto_update_detail">只更新已下載過的清單；系統可能因省電而延後執行。</string>
+    <string name="filter_auto_update_title">自動更新</string>
+    <string name="filter_auto_update_detail">只更新已下載的清單；系統可能延後執行。</string>
     <string name="filter_auto_update_interval_8">每 8 小時</string>
     <string name="filter_auto_update_interval_24">每 24 小時</string>
-    <string name="filter_auto_update_last_check">最近一次自動檢查</string>
 
     <!-- 開機自動啟動：預設關閉，且不宣稱一定成功。 -->
     <string name="settings_boot_section">開機自動啟動防護</string>
     <string name="settings_boot_toggle">開機後自動恢復防護</string>
     <string name="settings_boot_body">手機重新開機後，嘗試自動恢復 KuiesBlock 防護。需先完成 VPN 授權。</string>
-    <string name="settings_boot_always_on_hint">Android 可能延後或略過這個動作（例如 App 曾被強制停止）。若要在重新開機後更可靠地恢復，請在系統設定開啟 KuiesBlock 的「一律開啟的 VPN」。</string>
+    <string name="settings_boot_always_on_hint">Android 可能延後或略過。若要在開機後更可靠地恢復，請開啟系統的「一律開啟的 VPN」。</string>
     <string name="settings_boot_always_on_active">系統的「一律開啟的 VPN」已設為 KuiesBlock，開機後由系統負責恢復。</string>
     <string name="settings_boot_open_vpn_settings">開啟系統 VPN 設定</string>
     <string name="settings_boot_other_vpn">偵測到其他 VPN 正在使用，KuiesBlock 不會搶佔 VPN 位置。</string>

@@ -32,24 +32,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
 import tw.kuies.block.core.ProtectionState
-import tw.kuies.block.dns.DnsCheckStatus
-import tw.kuies.block.dns.DnsDiagnosticReport
-import tw.kuies.block.dns.DnsResolutionState
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSource
-import tw.kuies.block.filter.FilterSourceStatus
 import tw.kuies.block.filter.FilterStatus
-import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.update.ReleaseInfo
 import tw.kuies.block.update.UpdateCheckOutcome
 import tw.kuies.block.update.UpdatePresentation
 
 /**
- * Settings, kept to what a user genuinely needs: the privacy statement, the one diagnostic that
- * helps when protection will not start, and the app version.
+ * Settings, kept to what a user genuinely needs: the filter, the per-app and boot choices, the
+ * privacy statement and the app version.
  *
  * There is deliberately no transport picker: KuiesBlock implements a local DoH relay only, and
  * under strict Private DNS the DoT belongs to Android, so choosing a transport here could not do
@@ -57,8 +52,6 @@ import tw.kuies.block.update.UpdatePresentation
  */
 @Composable
 fun SettingsScreen(
-    dnsReport: DnsDiagnosticReport,
-    dnsChecking: Boolean,
     appVersion: String,
     filterStatus: FilterStatus?,
     filterBusy: Boolean,
@@ -72,9 +65,8 @@ fun SettingsScreen(
     onUpdateFilterNow: () -> Unit,
     /** Turns one custom-mode source on or off; the last selected source cannot be removed. */
     onSetSourceSelected: (FilterSource, Boolean) -> Unit,
-    /** The automatic-update preference and the outcome of its last run, or null until they are read. */
+    /** The automatic-update preference, or null until it is read. */
     autoUpdate: FilterAutoUpdateSettings?,
-    updateRecord: FilterUpdateRecord?,
     onSetAutoUpdateEnabled: (Boolean) -> Unit,
     onSetUpdateInterval: (UpdateInterval) -> Unit,
     /** Whether protection should come back by itself after a restart, and how the platform can help. */
@@ -83,7 +75,6 @@ fun SettingsScreen(
     anotherVpnActive: Boolean,
     onSetBootAutostart: (Boolean) -> Unit,
     onOpenVpnSettings: () -> Unit,
-    onRunDnsDiagnostics: () -> Unit,
     /** Shows the two-page first-run guide again. Records nothing and changes no setting. */
     onReplayGuide: () -> Unit,
     /** The app-update check: what the last one found, or null before the first one. */
@@ -121,7 +112,6 @@ fun SettingsScreen(
             status = filterStatus,
             updating = filterUpdating,
             autoUpdate = autoUpdate,
-            updateRecord = updateRecord,
             onUpdateNow = onUpdateFilterNow,
             onSetAutoUpdateEnabled = onSetAutoUpdateEnabled,
             onSetUpdateInterval = onSetUpdateInterval
@@ -133,18 +123,12 @@ fun SettingsScreen(
             onSetEnabled = onSetBootAutostart,
             onOpenVpnSettings = onOpenVpnSettings
         )
-        DiagnosticsSection(
-            dnsReport = dnsReport,
-            dnsChecking = dnsChecking,
-            onRunDnsDiagnostics = onRunDnsDiagnostics
-        )
         GuideSection(onReplayGuide = onReplayGuide)
         PrivacySection()
-        AboutSection(appVersion = appVersion)
-        // Deliberately the last item on the page: checking for a new version is the least frequent
-        // thing a user needs, and it must not push the protections and the lists above it out of reach.
-        AppUpdateSection(
-            currentVersion = appVersion,
+        // The version and its manual check share one card: they answer the same question, and two
+        // cards repeated the version on the same screen.
+        AboutSection(
+            appVersion = appVersion,
             checking = appUpdateChecking,
             outcome = appUpdate,
             onCheck = onCheckAppUpdate
@@ -188,16 +172,14 @@ private fun GuideSection(onReplayGuide: () -> Unit) {
  * The filter source the engine is actually using, and the one action that changes it.
  *
  * Every value comes from [FilterPresentation], so this screen cannot show a rule count that is not in
- * effect, nor call a failed update a success. There is deliberately no custom-subscription editor
- * yet: only the three built-in tiers are managed here, and a half-finished editor would promise
- * management the app cannot honour.
+ * effect, nor call a failed update a success. Each active source is named once; the list's maintainer
+ * and licence are kept to one compact attribution line instead of a paragraph per source.
  */
 @Composable
 private fun FilterSourceSection(
     status: FilterStatus?,
     updating: Boolean,
     autoUpdate: FilterAutoUpdateSettings?,
-    updateRecord: FilterUpdateRecord?,
     onUpdateNow: () -> Unit,
     onSetAutoUpdateEnabled: (Boolean) -> Unit,
     onSetUpdateInterval: (UpdateInterval) -> Unit
@@ -211,52 +193,42 @@ private fun FilterSourceSection(
             )
             return@SectionCard
         }
-        Text(
-            text = stringResource(R.string.filter_source_active_sources),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = FilterPresentation.activeSourceNames(status),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+
         val now = System.currentTimeMillis()
-        status.sourceStatuses.filter { it.enabled }.forEach { source ->
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        val activeSources = status.sourceStatuses.filter { it.enabled }
+        if (activeSources.isEmpty()) {
+            Text(
+                text = stringResource(R.string.filter_source_none_active),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        activeSources.forEach { source ->
+            Text(
+                text = source.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FilterPresentation.sourceIssueLabel(source)?.let { issue ->
                 Text(
-                    text = source.displayName,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                source.maintainer?.let { maintainer ->
-                    Text(
-                        text = "維護者：$maintainer",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                FilterSource.fromId(source.id)?.purpose?.let { purpose ->
-                    Text(
-                        text = purpose,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text(
-                    text = FilterPresentation.sourceStatusLabel(source, now),
+                    text = issue,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (FilterPresentation.sourceIssueIsError(source)) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
         }
+
         LabeledValue(
             label = stringResource(R.string.filter_source_rules),
-            value = FilterPresentation.effectiveRulesLabel(status)
+            value = FilterPresentation.effectiveRuleCountLabel(status)
         )
         LabeledValue(
             label = stringResource(R.string.filter_source_last_update),
-            value = FilterPresentation.updateResultLabel(status, now)
+            value = FilterPresentation.lastUpdateLabel(status, now)
         )
         Button(
             onClick = onUpdateNow,
@@ -271,10 +243,16 @@ private fun FilterSourceSection(
         }
         AutoUpdateControls(
             settings = autoUpdate,
-            record = updateRecord,
             onSetEnabled = onSetAutoUpdateEnabled,
             onSetInterval = onSetUpdateInterval
         )
+        FilterPresentation.sourceAttributionLabel(status)?.let { attribution ->
+            Text(
+                text = attribution,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Text(
             text = FilterPresentation.LICENCE,
             style = MaterialTheme.typography.bodySmall,
@@ -392,15 +370,11 @@ private fun CustomSourcePicker(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     val selectedCount = status.selectedSources.size
-    val now = System.currentTimeMillis()
     FilterSource.entries.forEach { source ->
         val selected = source.id in status.selectedSources
-        val sourceStatus = status.sourceStatuses.firstOrNull { it.id == source.id }
         SourceOption(
             source = source,
             selected = selected,
-            sourceStatus = sourceStatus,
-            now = now,
             // A selected checkbox cannot be the last one removed; a radio row changes by selecting
             // another tier rather than by unchecking itself.
             enabled = !busy && (!selected || source.isMultiTier || selectedCount > 1),
@@ -413,8 +387,6 @@ private fun CustomSourcePicker(
 private fun SourceOption(
     source: FilterSource,
     selected: Boolean,
-    sourceStatus: FilterSourceStatus?,
-    now: Long,
     enabled: Boolean,
     onSetSelected: (Boolean) -> Unit
 ) {
@@ -461,27 +433,6 @@ private fun SourceOption(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                text = FilterPresentation.maintainerLabel(source),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "授權：${source.licenceName}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (selected && sourceStatus != null) {
-                Text(
-                    text = FilterPresentation.sourceStatusLabel(sourceStatus, now),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (sourceStatus.state == tw.kuies.block.filter.SubscriptionState.FAILED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
-            }
         }
     }
 }
@@ -506,57 +457,6 @@ private fun SettingsHeader(onBack: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticsSection(
-    dnsReport: DnsDiagnosticReport,
-    dnsChecking: Boolean,
-    onRunDnsDiagnostics: () -> Unit
-) {
-    SectionCard(title = stringResource(R.string.settings_diagnostics_section)) {
-        Button(
-            onClick = onRunDnsDiagnostics,
-            enabled = !dnsChecking,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(stringResource(R.string.action_run_dns_diagnostics))
-        }
-        DiagnosticResult(dnsReport = dnsReport, dnsChecking = dnsChecking)
-    }
-}
-
-/**
- * Shows only categories and outcomes — never a resolved address, a certificate detail, or a raw
- * exception — so the user's own DNS server cannot leak through this screen.
- */
-@Composable
-private fun DiagnosticResult(dnsReport: DnsDiagnosticReport, dnsChecking: Boolean) {
-    val status = if (dnsChecking) DnsCheckStatus.CHECKING else dnsReport.status
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        LabeledValue(
-            label = stringResource(R.string.settings_diagnostic_result),
-            value = DnsPresentation.statusLabel(status)
-        )
-        if (!dnsChecking && dnsReport.resolution == DnsResolutionState.FAILED) {
-            Text(
-                text = DnsPresentation.resolutionFailureLabel(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-        dnsReport.probes.forEach { probe ->
-            Text(
-                text = stringResource(
-                    R.string.settings_diagnostic_probe,
-                    probe.label,
-                    DnsPresentation.probeSummary(probe)
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
 private fun PrivacySection() {
     SectionCard(title = stringResource(R.string.settings_privacy_section)) {
         Text(
@@ -567,44 +467,26 @@ private fun PrivacySection() {
     }
 }
 
-@Composable
-private fun AboutSection(appVersion: String) {
-    SectionCard(title = stringResource(R.string.settings_about_section)) {
-        LabeledValue(
-            label = stringResource(R.string.settings_about_version),
-            value = appVersion
-        )
-        Text(
-            text = stringResource(R.string.app_tagline),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
 /**
- * The one place the app's own version is checked against GitHub.
+ * The installed version and the manual GitHub check, in one card.
  *
- * Deliberately manual and last on the page: it is a lookup the user asks for, never a schedule, and it
- * shares nothing with the filter-list worker. The version shown here is the same `versionName` the
- * about section above displays, so the two can never disagree.
- *
- * The button carries the whole progress state: it reads 檢查中… and is disabled while a lookup runs, so
- * a second tap cannot start a parallel request, and it is enabled again in every outcome so a failure
- * can always be retried by hand.
+ * The check is deliberately manual and last on the page: it is a lookup the user asks for, never a
+ * schedule, and it shares nothing with the filter-list worker. The version comes from the installed
+ * package, so it cannot disagree with what Android reports, and the button carries the whole progress
+ * state — 檢查中… and disabled while a lookup runs — so a second tap cannot start a parallel request.
  */
 @Composable
-private fun AppUpdateSection(
-    currentVersion: String,
+private fun AboutSection(
+    appVersion: String,
     checking: Boolean,
     outcome: UpdateCheckOutcome?,
     onCheck: () -> Unit
 ) {
-    SectionCard(title = stringResource(R.string.settings_update_section)) {
+    SectionCard(title = stringResource(R.string.settings_about_section)) {
         Text(
             text = stringResource(
                 R.string.settings_update_current,
-                UpdatePresentation.versionLabel(currentVersion)
+                UpdatePresentation.versionLabel(appVersion)
             ),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface
@@ -755,7 +637,6 @@ private fun LabeledValue(label: String, value: String) {
 @Composable
 private fun AutoUpdateControls(
     settings: FilterAutoUpdateSettings?,
-    record: FilterUpdateRecord?,
     onSetEnabled: (Boolean) -> Unit,
     onSetInterval: (UpdateInterval) -> Unit
 ) {
@@ -785,11 +666,6 @@ private fun AutoUpdateControls(
             )
         }
     }
-    LabeledValue(
-        label = stringResource(R.string.filter_auto_update_last_check),
-        value = record?.let { FilterPresentation.lastCheckLabel(it, System.currentTimeMillis()) }
-            ?: stringResource(R.string.filter_state_label_loading)
-    )
 }
 
 /**

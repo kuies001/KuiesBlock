@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -38,12 +37,7 @@ import tw.kuies.block.data.InstalledApp
 import tw.kuies.block.data.InstalledAppsRepository
 import tw.kuies.block.data.OnboardingGate
 import tw.kuies.block.data.ProtectionIntentStore
-import tw.kuies.block.dns.DnsConfigStore
-import tw.kuies.block.dns.DnsDiagnosticReport
-import tw.kuies.block.dns.DnsDiagnostics
 import tw.kuies.block.dns.PrivateDnsSettings
-import tw.kuies.block.doh.PlainDnsBootstrap
-import tw.kuies.block.doh.VpnSocketProtector
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterAutoUpdateStore
 import tw.kuies.block.filter.FilterCoordinatorHolder
@@ -51,7 +45,6 @@ import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
-import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.FilterUpdateSchedulePolicy
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
@@ -65,12 +58,8 @@ import tw.kuies.block.update.UpdateChecker
 import tw.kuies.block.vpn.AlwaysOnVpnProbe
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.OtherVpnProbe
-import tw.kuies.block.vpn.UnderlyingNetworkFinder
 import tw.kuies.block.vpn.VpnAuthorization
-import java.net.InetAddress
 import java.util.concurrent.Executors
-
-private const val TAG = "KuiesBlockApp"
 
 private enum class BlockDestination { HOME, SETTINGS, APP_PROTECTION }
 
@@ -84,7 +73,6 @@ fun KuiesBlockApp(
     val appContext = context.applicationContext
     val settingsStore = remember(appContext) { AppSettingsStore(appContext) }
     val appExclusionStore = remember(appContext) { AppExclusionStore(appContext) }
-    val dnsStore = remember(appContext) { DnsConfigStore(appContext) }
     val updateStore = remember(appContext) { FilterAutoUpdateStore(appContext) }
     val protectionIntentStore = remember(appContext) { ProtectionIntentStore(appContext) }
     val updateScheduler = remember(appContext) { WorkManagerPeriodicUpdateScheduler(appContext) }
@@ -125,12 +113,6 @@ fun KuiesBlockApp(
     // Whether another app's VPN owns the system's default network. Shown as a plain notice only.
     var anotherVpnActive by remember { mutableStateOf(false) }
 
-    // Read once: with the transport picker gone there is nothing on screen that changes it. The
-    // stored configuration still drives the tunnel and the diagnostic below.
-    val dnsConfig = remember { dnsStore.load() }
-    var dnsReport by remember { mutableStateOf(DnsDiagnosticReport.notChecked(dnsConfig.host, dnsConfig.protocol)) }
-    var dnsChecking by remember { mutableStateOf(false) }
-
     // Null until the coordinator has read the stored settings, so the strength list marks no choice
     // rather than guessing one.
     var filterStatus by remember { mutableStateOf<FilterStatus?>(null) }
@@ -149,9 +131,8 @@ fun KuiesBlockApp(
     var appProtectionStatus by remember { mutableStateOf(AppProtectionStatus.IDLE) }
     var appApplyResult by remember { mutableStateOf<AppExclusionApplyResult?>(null) }
 
-    // The automatic-update preference and the outcome of its last run, or null until they are read.
+    // The automatic-update preference, or null until it is read.
     var autoUpdate by remember { mutableStateOf<FilterAutoUpdateSettings?>(null) }
-    var updateRecord by remember { mutableStateOf<FilterUpdateRecord?>(null) }
 
     // Boot auto-start: the stored preference, and whether the system's Always-on VPN already owns the
     // restore. Both are read from the platform, never inferred.
@@ -182,7 +163,6 @@ fun KuiesBlockApp(
         // restore leaves the user's interval in force instead of losing the schedule.
         val storedAutoUpdate = updateStore.load()
         autoUpdate = storedAutoUpdate
-        updateRecord = updateStore.loadRecord()
         bootAutostart = protectionIntentStore.bootAutostartEnabled()
         FilterUpdateSchedulePolicy.apply(storedAutoUpdate, updateScheduler)
         onDispose {
@@ -330,30 +310,6 @@ fun KuiesBlockApp(
             !granted -> ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRevoked())
             ProtectionStatusHolder.state == ProtectionState.NOT_AUTHORIZED ->
                 ProtectionStatusHolder.update(ProtectionStateRules.afterAuthorizationRequest(true))
-        }
-    }
-
-    fun runDnsDiagnostics() {
-        if (dnsChecking) return
-        dnsChecking = true
-        val config = dnsConfig
-        executor.execute {
-            val report = try {
-                // Resolve through the same protected bootstrap the DoH client uses, never through the
-                // system resolver that Android's Private DNS takes over. The addresses stay inside
-                // this call: the report carries outcomes only.
-                val servers = UnderlyingNetworkFinder.find(appContext)?.dnsServers.orEmpty()
-                val resolver: (String) -> List<InetAddress> =
-                    PlainDnsBootstrap(VpnSocketProtector.NONE, servers)::resolve
-                DnsDiagnostics(config, resolver).run()
-            } catch (exception: Exception) {
-                Log.w(TAG, "DNS diagnostics failed: ${exception.javaClass.simpleName}")
-                DnsDiagnosticReport.failed(config.host, config.protocol, System.currentTimeMillis())
-            }
-            mainHandler.post {
-                dnsReport = report
-                dnsChecking = false
-            }
         }
     }
 
@@ -662,8 +618,6 @@ fun KuiesBlockApp(
         )
 
         BlockDestination.SETTINGS -> SettingsScreen(
-            dnsReport = dnsReport,
-            dnsChecking = dnsChecking,
             appVersion = appVersion,
             filterStatus = filterStatus,
             filterBusy = filterBusy,
@@ -677,7 +631,6 @@ fun KuiesBlockApp(
             onUpdateFilterNow = { updateFilterNow() },
             onSetSourceSelected = { source, selected -> selectFilterSource(source, selected) },
             autoUpdate = autoUpdate,
-            updateRecord = updateRecord,
             onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },
             onSetUpdateInterval = { interval -> setUpdateInterval(interval) },
             bootAutostartEnabled = bootAutostart,
@@ -685,7 +638,6 @@ fun KuiesBlockApp(
             anotherVpnActive = anotherVpnActive,
             onSetBootAutostart = { enabled -> setBootAutostart(enabled) },
             onOpenVpnSettings = { openVpnSettings() },
-            onRunDnsDiagnostics = { runDnsDiagnostics() },
             onReplayGuide = {
                 // A replay: the two pages are shown over settings, and leaving them records nothing
                 // and changes no stored value, so the guide can never come back by itself from here.

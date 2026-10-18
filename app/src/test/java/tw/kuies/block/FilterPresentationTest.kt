@@ -198,36 +198,6 @@ class FilterPresentationTest {
         }
     }
 
-    /**
-     * The 過濾器管理 row describes one source, so it must show that source's own state — showing the
-     * local filter's master value there labelled a whole-filter state as one list's status.
-     */
-    @Test
-    fun theSourceRowShowsTheListsOwnStateNotTheFilterMaster() {
-        assertEquals("已啟用", FilterPresentation.mainListEnabledLabel(readyStatus(rules = 5)))
-
-        val listSwitchedOff = FilterStatus.of(
-            FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
-                FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
-                    state = SubscriptionState.READY,
-                    ruleCount = 5,
-                    enabled = false
-                )
-            ),
-            FilterSnapshot.EMPTY
-        )
-
-        assertTrue("the fixture must keep the filter itself configured", listSwitchedOff.enabled)
-        assertEquals("已停用", FilterPresentation.mainListEnabledLabel(listSwitchedOff))
-    }
-
-    @Test
-    fun theSourceSectionNamesTheActiveTierAndItsMaintainer() {
-        assertEquals("HaGeZi Multi NORMAL", FilterPresentation.mainListName(readyStatus(rules = 5)))
-        assertEquals("HaGeZi", FilterPresentation.MAINTAINER)
-        assertTrue(FilterPresentation.LICENCE, FilterPresentation.LICENCE.contains("GPL-3.0"))
-    }
-
     @Test
     fun theEnabledFlagReadsAsEnabledOrDisabled() {
         assertEquals("已啟用", FilterPresentation.sourceEnabledLabel(true))
@@ -237,15 +207,24 @@ class FilterPresentationTest {
     @Test
     fun theRuleCountComesFromThePublishedSnapshotNotFromWhatTheListClaims() {
         // The subscription claims 161,902 rules, but only one rule is actually published.
-        val label = FilterPresentation.effectiveRulesLabel(readyStatus(rules = 161_902))
+        val label = FilterPresentation.effectiveRuleCountLabel(readyStatus(rules = 161_902))
 
-        assertEquals("目前生效規則：1 條", label)
+        assertEquals("1 條", label)
         assertEquals(
-            "目前沒有生效中的規則",
-            FilterPresentation.effectiveRulesLabel(
+            "尚未生效",
+            FilterPresentation.effectiveRuleCountLabel(
                 FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY)
             )
         )
+    }
+
+    /** The count is grouped for readability, as the compact card shows it. */
+    @Test
+    fun theRuleCountIsGroupedWithThousandsSeparators() {
+        val status = FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY)
+            .copy(effectiveRuleCount = 164_947)
+
+        assertEquals("164,947 條", FilterPresentation.effectiveRuleCountLabel(status))
     }
 
     @Test
@@ -260,7 +239,7 @@ class FilterPresentationTest {
     }
 
     @Test
-    fun aFailedUpdateSaysThePreviousListIsStillInUse() {
+    fun aFailedUpdateKeepsTheLastRealSuccessAndSaysTheOldListIsStillInUse() {
         val settings = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
             FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
                 state = SubscriptionState.FAILED,
@@ -269,34 +248,37 @@ class FilterPresentationTest {
                 lastError = "network error"
             )
         )
-        val label = FilterPresentation.updateResultLabel(
-            FilterStatus.of(settings, FilterSnapshot.EMPTY),
-            now = 1_000_000L
-        )
+        val status = FilterStatus.of(settings, FilterSnapshot.EMPTY)
+        val now = 1_000L + 5 * 60_000
 
-        assertTrue(label, label.contains("上次更新失敗"))
-        assertTrue(label, label.contains("network error"))
+        assertEquals("5 分鐘前", FilterPresentation.lastUpdateLabel(status, now))
+
+        val issue = FilterPresentation.sourceIssueLabel(status.sourceStatuses.single())
+        assertTrue(issue!!, issue.contains("network error"))
         assertTrue(
             "a failed update must not read as having no protection",
-            label.contains("仍使用上一次成功的清單")
+            issue.contains("仍使用上次成功的清單")
         )
     }
 
     @Test
-    fun updateResultReportsSuccessAndNotDownloadedYetWithoutContradictingItself() {
-        val ready = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
+    fun theLastUpdateNeverTreatsAFailedAttemptAsASuccess() {
+        val failedWithoutSuccess = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
             FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
-                state = SubscriptionState.READY,
-                ruleCount = 5,
-                lastSuccessAtMillis = 100_000L
+                state = SubscriptionState.FAILED,
+                ruleCount = 0,
+                lastSuccessAtMillis = null,
+                lastError = "timeout"
             )
         )
         assertEquals(
-            "上次更新成功（5 分鐘前）。",
-            FilterPresentation.updateResultLabel(FilterStatus.of(ready, FilterSnapshot.EMPTY), now = 400_000L)
+            "尚未下載",
+            FilterPresentation.lastUpdateLabel(
+                FilterStatus.of(failedWithoutSuccess, FilterSnapshot.EMPTY),
+                now = 400_000L
+            )
         )
 
-        // Ready without a timestamp: still a success, but never the "從未成功更新" wording.
         val readyWithoutTime = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
             FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
                 state = SubscriptionState.READY,
@@ -305,19 +287,33 @@ class FilterPresentationTest {
             )
         )
         assertEquals(
-            "上次更新成功。",
-            FilterPresentation.updateResultLabel(
+            "尚未記錄更新時間",
+            FilterPresentation.lastUpdateLabel(
                 FilterStatus.of(readyWithoutTime, FilterSnapshot.EMPTY),
                 now = 400_000L
             )
         )
 
         assertEquals(
-            "尚未下載清單。",
-            FilterPresentation.updateResultLabel(
+            "尚未下載",
+            FilterPresentation.lastUpdateLabel(
                 FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY),
                 now = 400_000L
             )
+        )
+    }
+
+    @Test
+    fun anActiveSourceWithRulesReportsNoProblemButAnEmptyOneDoes() {
+        assertEquals(
+            null,
+            FilterPresentation.sourceIssueLabel(readyStatus(rules = 5).sourceStatuses.single())
+        )
+
+        val notDownloaded = FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY)
+        assertEquals(
+            "尚未下載",
+            FilterPresentation.sourceIssueLabel(notDownloaded.sourceStatuses.single())
         )
     }
 
