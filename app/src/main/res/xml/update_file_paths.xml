@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- Only the downloaded update APK is exposed, and only to the installer that receives its URI. -->
-    <cache-path name="updates" path="updates/" />
-</paths>

@@ -1,6 +1,10 @@
 package tw.kuies.block.update
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageInstaller
+import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -125,6 +129,57 @@ object UpdateInstaller {
             return UpdateInstallResult.Failed(failure)
         }
         return UpdateInstallResult.Verified(finalFile)
+    }
+
+    /**
+     * Writes a verified APK into a PackageInstaller session and commits it.
+     *
+     * Android's own PackageInstaller owns the final confirmation UI, so no implicit APK view intent
+     * can fall through to a third-party installer. The session is abandoned if writing or committing
+     * fails; the receiver handles the asynchronous result.
+     */
+    fun commitSession(context: Context, file: File): UpdateInstallFailure? {
+        val installer = context.packageManager.packageInstaller
+        var sessionId = -1
+        var failure: UpdateInstallFailure? = null
+        try {
+            val params = PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            ).apply { setSize(file.length()) }
+            sessionId = installer.createSession(params)
+            installer.openSession(sessionId).use { session ->
+                session.openWrite("base.apk", 0, file.length()).use { output ->
+                    file.inputStream().use { input -> input.copyTo(output) }
+                    session.fsync(output)
+                }
+                val callback = Intent(context, UpdateInstallReceiver::class.java)
+                    .setAction(UpdateInstallReceiver.ACTION_STATUS)
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_MUTABLE
+                    } else {
+                        0
+                    }
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    sessionId,
+                    callback,
+                    flags
+                )
+                session.commit(pendingIntent.intentSender)
+            }
+        } catch (_: SecurityException) {
+            failure = UpdateInstallFailure.INSTALL_BLOCKED
+        } catch (_: IOException) {
+            failure = UpdateInstallFailure.INSTALL_FAILED
+        } catch (_: Exception) {
+            failure = UpdateInstallFailure.INSTALL_FAILED
+        } finally {
+            if (failure != null && sessionId != -1) {
+                runCatching { installer.abandonSession(sessionId) }
+            }
+        }
+        return failure
     }
 
     /** Deletes both the finished APK and any partial download. Safe to call from any thread. */

@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -60,6 +60,7 @@ import tw.kuies.block.update.UpdateInstallFailure
 import tw.kuies.block.update.UpdateInstallResult
 import tw.kuies.block.update.UpdateInstallState
 import tw.kuies.block.update.UpdateInstaller
+import tw.kuies.block.update.UpdateInstallStatus
 import tw.kuies.block.vpn.AlwaysOnVpnProbe
 import tw.kuies.block.vpn.KuiesVpnService
 import tw.kuies.block.vpn.OtherVpnProbe
@@ -75,8 +76,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 private enum class BlockDestination { HOME, SETTINGS, APP_PROTECTION }
-
-private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 
 @Composable
 fun KuiesBlockApp(
@@ -166,6 +165,13 @@ fun KuiesBlockApp(
     var verifiedUpdateFile by remember { mutableStateOf<File?>(null) }
     val updateInstallerScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
     var updateJob by remember { mutableStateOf<Job?>(null) }
+    val installFailure by UpdateInstallStatus.failure.collectAsState()
+    LaunchedEffect(installFailure) {
+        installFailure?.let { failure ->
+            updateInstallState = UpdateInstallState.Failed(failure)
+            UpdateInstallStatus.clear()
+        }
+    }
 
     // Private DNS mode as state, not a value read during composition: only a state write can
     // recompose, so reading it at the call site left the strength section describing a mode the user
@@ -330,11 +336,8 @@ fun KuiesBlockApp(
     }
 
     /**
-     * Hands a verified APK to Android's installer.
-     *
-     * The file is exposed through FileProvider with a one-time read grant. If the user has not allowed
-     * installs from KuiesBlock yet, the system settings page is opened instead; returning with the
-     * permission granted continues from the same verified file. Nothing here stops or rebuilds the VPN.
+     * Writes the verified APK into a PackageInstaller session. Android's own installer owns the
+     * confirmation UI, so no implicit APK view intent can offer a third-party installer.
      */
     fun launchUpdateInstaller(file: File) {
         if (!appContext.packageManager.canRequestPackageInstalls()) {
@@ -342,25 +345,17 @@ fun KuiesBlockApp(
             openInstallPermissionSettings()
             return
         }
-        val uri = runCatching {
-            FileProvider.getUriForFile(
-                appContext,
-                "${appContext.packageName}.updates",
-                file
-            )
-        }.getOrNull()
-        if (uri == null) {
-            updateInstallState = UpdateInstallState.Failed(UpdateInstallFailure.INSTALLER_UNAVAILABLE)
-            return
-        }
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, APK_MIME_TYPE)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        val launched = runCatching { appContext.startActivity(intent) }.isSuccess
-        updateInstallState = if (launched) {
-            UpdateInstallState.Ready
-        } else {
-            UpdateInstallState.Failed(UpdateInstallFailure.INSTALLER_UNAVAILABLE)
+        updateInstallState = UpdateInstallState.Installing
+        UpdateInstallStatus.clear()
+        updateInstallerScope.launch {
+            val failure = UpdateInstaller.commitSession(appContext, file)
+            mainHandler.post {
+                updateInstallState = if (failure == null) {
+                    UpdateInstallState.Ready
+                } else {
+                    UpdateInstallState.Failed(failure)
+                }
+            }
         }
     }
 
@@ -374,6 +369,7 @@ fun KuiesBlockApp(
     fun startUpdateDownload(release: ReleaseInfo) {
         if (updateJob?.isActive == true) return
         verifiedUpdateFile = null
+        UpdateInstallStatus.clear()
         updateInstallState = UpdateInstallState.Downloading(null)
         updateJob = updateInstallerScope.launch {
             try {
@@ -395,7 +391,6 @@ fun KuiesBlockApp(
                     when (result) {
                         is UpdateInstallResult.Verified -> {
                             verifiedUpdateFile = result.file
-                            updateInstallState = UpdateInstallState.Ready
                             launchUpdateInstaller(result.file)
                         }
                         is UpdateInstallResult.Failed ->
@@ -423,6 +418,7 @@ fun KuiesBlockApp(
         updateJob?.cancel()
         updateJob = null
         verifiedUpdateFile = null
+        UpdateInstallStatus.clear()
         updateInstallState = UpdateInstallState.Idle
         updateInstallerScope.launch { UpdateInstaller.clearCache(appContext) }
     }
@@ -434,6 +430,7 @@ fun KuiesBlockApp(
         val clearCache = updateInstallState !is UpdateInstallState.Ready
         pendingUpdate = null
         verifiedUpdateFile = null
+        UpdateInstallStatus.clear()
         updateInstallState = UpdateInstallState.Idle
         if (clearCache) {
             updateInstallerScope.launch { UpdateInstaller.clearCache(appContext) }

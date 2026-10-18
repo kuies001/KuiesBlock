@@ -61,18 +61,12 @@
         </activity>
 
         <!--
-          The downloaded APK stays in the app's private cache. FileProvider hands the system installer
-          a one-time readable URI only after the download, checksum and signature checks succeeded.
+          PackageInstaller writes the verified APK into a session and the system installer owns the
+          confirmation UI. The receiver only receives that session's explicit result callback.
         -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.updates"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/update_file_paths" />
-        </provider>
+        <receiver
+            android:name=".update.UpdateInstallReceiver"
+            android:exported="false" />
 
         <!--
           VpnService is bound by the system, so it must not be exported to other
