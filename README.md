@@ -14,7 +14,7 @@ KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的
 - 最低版本：Android 9（API 28）
 - 目標／編譯版本：API 37
 - 套件名稱：`tw.kuies.block`
-- 版本：**v0.4.4**
+- 版本：**v0.4.41**
 - 發布方式：GitHub 直接提供 APK（不上架 Google Play）
 - 免費、無廣告、無訂閱、無帳號、無追蹤 SDK
 
@@ -41,6 +41,17 @@ KuiesBlock 是一款 Android 輕量廣告攔截器。它使用 Android 內建的
 - 不以明文 DNS 回應用戶查詢，也不會把加密 DNS 靜默降級為明文。
 
 ## 目前狀態
+
+**v0.4.41 的 App 內更新功能已完成建置與程式碼驗證：**
+
+- 「檢查更新」發現新的正式版本後，可直接在 App 內下載 APK，不需要前往 GitHub 下載頁。
+- 下載完成後會驗證 SHA-256、套件名稱、`versionName`、`versionCode` 與正式簽章，通過後才交給
+  Android 系統安裝器。
+- 下載與驗證期間會顯示進度、取消與失敗重試；APK 只存放在 App 私有快取。
+- 尚未允許安裝未知來源 App 時會導向系統設定，返回且授權後繼續安裝同一份已驗證 APK。
+
+實機下載、取消、未知來源授權返回、系統安裝器覆蓋安裝與資料保留仍為 `INCONCLUSIVE`；
+本輪沒有執行 Emulator、ADB 或實機安裝測試。
 
 **v0.4.4 的 UI 改版已完成實機測試：**
 
@@ -96,7 +107,7 @@ BASELINE 宣告、Wi-Fi → 行動網路 → Wi-Fi 交接（390 → 373 → 393�
 本機建置與單元測試：
 
 - `:app:assembleDebug`、`:app:assembleRelease`（含 R8 與 lintVital）皆成功
-- `:app:testDebugUnitTest`：608 個測試（70 個測試類別）、0 失敗、1 略過
+- `:app:testDebugUnitTest`：620 個測試（71 個測試類別）、0 失敗、1 略過
 
 **只有上述一台裝置完成驗收。** 其他 Android 版本與機型尚未逐一驗證；私人 DNS「自動」模式是否真的
 使用 DoT 無法由平台觀測，該子項維持無法判定（不視為通過）。

@@ -2,6 +2,44 @@
 
 本專案遵循語意化版本。以下記錄各版本的實際變更。
 
+## v0.4.41
+
+**主題：App 內下載並安裝更新**
+
+### 新增
+
+- 「檢查更新」發現新的正式版本後，可直接在 App 內下載 APK 並交給 Android 系統安裝器；
+  不需要再自行前往 GitHub 下載頁。
+- 下載階段顯示進度百分比與「取消下載」；下載失敗可重試，取消或失敗會清除未完成暫存檔。
+- 下載完成後先驗證，再顯示「下載完成，準備安裝」並開啟系統安裝器。
+- 未允許安裝未知來源 App 時，導向系統設定；返回且授權後繼續開啟同一份已驗證 APK。
+- 使用 FileProvider 與 `REQUEST_INSTALL_PACKAGES`，只授予暫時性的 APK 讀取權限。
+
+### 安全驗證
+
+- 只接受 `https://github.com/kuies001/KuiesBlock/releases/download/<tag>/<name>` 的單一官方 APK；
+  轉址只允許 GitHub 官方 Release CDN。
+- SHA-256 優先採用 Release asset digest，沒有時使用同一 Release 的 `.sha256`；
+  無法取得可信雜湊值時不允許安裝。
+- 驗證 APK 套件名稱 `tw.kuies.block`、`versionName` 與 Release tag 一致、
+  `versionCode` 高於目前安裝版本，且不允許降版。
+- 使用 Android `GET_SIGNING_CERTIFICATES` 解析並驗證 APK 簽章，再比對憑證 SHA-256：
+  `b6f5ccd5b3c8497e8b095db2c653c0dfe5b1c6e9b84b0f67307aad501af3235c`。
+- Debug 簽章與正式簽章不同時顯示無法直接覆蓋的說明，不要求清除資料或解除安裝。
+
+### 變更
+
+- `versionName` → `0.4.41`，`versionCode` → `11`。
+- 版本比較維持三段數字逐段比較，`0.4.4 < 0.4.41 < 0.4.42 < 0.5.0`。
+
+### 已知限制（v0.4.41）
+
+- 本版沒有改變 DNS、VPN、過濾規則、WorkManager、個別 App 防護、私人 DNS 或開機自啟。
+- 更新仍由使用者手動觸發，最後由 Android 系統安裝確認；不會自動下載或靜默安裝。
+- Debug 簽章版本無法直接覆蓋為正式簽章版本。
+- 實機下載、取消、未知來源授權返回、系統安裝器覆蓋安裝與資料保留仍為 `INCONCLUSIVE`。
+- v0.4.4 與之前版本的所有已知限制繼續適用。
+
 ## v0.4.4
 
 **主題：首頁與設定頁 UI 精簡**
