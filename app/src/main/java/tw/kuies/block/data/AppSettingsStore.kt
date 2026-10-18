@@ -22,7 +22,8 @@ class AppSettingsStore(private val prefs: SharedPreferences) {
         // Presence, not value: a recorded "no" is as much a sign of use as a recorded "yes".
         vpnAuthorizationRecorded = prefs.contains(KEY_VPN_AUTHORIZED),
         onboardingState = OnboardingState.fromId(prefs.getString(KEY_ONBOARDING_STATE, null)),
-        protectionStarted = prefs.getBoolean(KEY_PROTECTION_STARTED, false)
+        protectionStarted = prefs.getBoolean(KEY_PROTECTION_STARTED, false),
+        themeMode = ThemeMode.fromId(prefs.getString(KEY_THEME_MODE, null))
     )
 
     fun setVpnAuthorizationGranted(granted: Boolean) {
@@ -50,10 +51,16 @@ class AppSettingsStore(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(KEY_PROTECTION_STARTED, true).apply()
     }
 
+    /** Stores the theme choice; an absent or unknown value reads back as [ThemeMode.SYSTEM]. */
+    fun setThemeMode(mode: ThemeMode) {
+        prefs.edit().putString(KEY_THEME_MODE, mode.id).apply()
+    }
+
     companion object {
         const val PREFS_NAME = "kuies_block_settings"
         private const val KEY_VPN_AUTHORIZED = "vpn_authorization_granted"
         private const val KEY_ONBOARDING_STATE = "onboarding_state"
         private const val KEY_PROTECTION_STARTED = "protection_started"
+        private const val KEY_THEME_MODE = "theme_mode"
     }
 }

@@ -35,5 +35,8 @@ data class AppSettings(
      * revokes the VPN authorization in Android's settings, where [vpnAuthorizationGranted] would go
      * back to false and the install would otherwise look untouched.
      */
-    val protectionStarted: Boolean = false
+    val protectionStarted: Boolean = false,
+
+    /** The user's theme choice; [ThemeMode.SYSTEM] for a new or older install with no value stored. */
+    val themeMode: ThemeMode = ThemeMode.SYSTEM
 )
