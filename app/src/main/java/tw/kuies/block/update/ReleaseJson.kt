@@ -33,7 +33,27 @@ object ReleaseJson {
             version = version,
             tagName = tagName,
             notes = fields["body"]?.asText().orEmpty(),
-            pageUrl = fields["html_url"]?.asText()?.takeIf { it.isNotBlank() }
+            pageUrl = fields["html_url"]?.asText()?.takeIf { it.isNotBlank() },
+            assets = (fields["assets"] as? JsonValue.Items)
+                ?.values
+                ?.mapNotNull(::parseAsset)
+                .orEmpty()
+        )
+    }
+
+    /** One asset, or null when it does not carry the two fields a download needs. */
+    private fun parseAsset(value: JsonValue): ReleaseAsset? {
+        val fields = (value as? JsonValue.Fields)?.values ?: return null
+        val name = fields["name"]?.asText()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val url = fields["browser_download_url"]?.asText()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val size = (fields["size"] as? JsonValue.Number)?.raw?.toLongOrNull()?.takeIf { it >= 0 } ?: 0L
+        val digest = fields["digest"]?.asText()?.trim()?.takeIf { it.isNotEmpty() }
+        return ReleaseAsset(
+            name = name,
+            downloadUrl = url,
+            sizeBytes = size,
+            digest = digest
         )
     }
 

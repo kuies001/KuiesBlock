@@ -25,6 +25,17 @@ class AppVersionTest {
     }
 
     @Test
+    fun aThreePartPatchWithTwoDigitsIsComparedNumerically() {
+        // 0.4.41 is a three-part version, not the decimal 0.4.41 = 0.441.
+        assertTrue(version("0.4.41") > version("0.4.4"))
+        assertTrue(version("0.4.42") > version("0.4.41"))
+        assertTrue(version("0.5.0") > version("0.4.42"))
+        assertTrue(version("0.4.4") < version("0.4.41"))
+        assertEquals("0.4.41", version("v0.4.41").text())
+        assertEquals("v0.4.41", version("0.4.41").tagText())
+    }
+
+    @Test
     fun aTwoDigitPatchIsComparedAsANumberNotAsText() {
         assertTrue(version("v0.4.10") > version("v0.4.9"))
         assertTrue(version("v0.4.9") < version("v0.4.10"))

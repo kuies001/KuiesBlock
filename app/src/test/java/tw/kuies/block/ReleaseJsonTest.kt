@@ -52,6 +52,46 @@ class ReleaseJsonTest {
     }
 
     @Test
+    fun readsTheOfficialApkAssetAndItsDigest() {
+        val sha = "ce804b50826187cd9c7cc0044e42549cae11dad6c4f88783ec1d14c9d9f68974"
+        val parsed = ReleaseJson.parse(
+            """
+            {
+              "tag_name": "v0.4.41",
+              "assets": [
+                {
+                  "name": "KuiesBlock-v0.4.41.apk",
+                  "size": 123,
+                  "browser_download_url": "https://github.com/kuies001/KuiesBlock/releases/download/v0.4.41/KuiesBlock-v0.4.41.apk",
+                  "digest": "sha256:$sha"
+                },
+                {
+                  "name": "KuiesBlock-v0.4.41.sha256",
+                  "size": 89,
+                  "browser_download_url": "https://github.com/kuies001/KuiesBlock/releases/download/v0.4.41/KuiesBlock-v0.4.41.sha256"
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(2, parsed!!.assets.size)
+        assertEquals("KuiesBlock-v0.4.41.apk", parsed.assets[0].name)
+        assertEquals(123L, parsed.assets[0].sizeBytes)
+        assertEquals("sha256:$sha", parsed.assets[0].digest)
+        assertEquals(null, parsed.assets[1].digest)
+    }
+
+    @Test
+    fun anAssetWithoutANameOrUrlIsIgnored() {
+        val parsed = ReleaseJson.parse(
+            """{"tag_name":"v0.4.41","assets":[{"size":1},{"name":"a.apk"}]}"""
+        )
+
+        assertEquals(0, parsed!!.assets.size)
+    }
+
+    @Test
     fun aTagWithoutTheGithubPrefixStillNamesTheSameVersion() {
         val parsed = ReleaseJson.parse(releaseBody(tag = "0.4.1"))
 
