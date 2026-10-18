@@ -38,6 +38,7 @@ import tw.kuies.block.data.InstalledApp
 import tw.kuies.block.data.InstalledAppsRepository
 import tw.kuies.block.data.OnboardingGate
 import tw.kuies.block.data.ProtectionIntentStore
+import tw.kuies.block.data.ThemeMode
 import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterAutoUpdateStore
@@ -81,6 +82,8 @@ private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 fun KuiesBlockApp(
     lifecycleOwner: LifecycleOwner,
     appVersion: String,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -760,6 +763,8 @@ fun KuiesBlockApp(
 
         BlockDestination.SETTINGS -> SettingsScreen(
             appVersion = appVersion,
+            themeMode = themeMode,
+            onSetThemeMode = onThemeModeChange,
             filterStatus = filterStatus,
             filterBusy = filterBusy,
             filterUpdating = filterUpdating,

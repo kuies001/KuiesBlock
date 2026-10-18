@@ -33,6 +33,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
 import tw.kuies.block.core.ProtectionState
+import tw.kuies.block.data.ThemeMode
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterMode
@@ -55,6 +56,8 @@ import tw.kuies.block.update.UpdatePresentation
 @Composable
 fun SettingsScreen(
     appVersion: String,
+    themeMode: ThemeMode,
+    onSetThemeMode: (ThemeMode) -> Unit,
     filterStatus: FilterStatus?,
     filterBusy: Boolean,
     filterUpdating: Boolean,
@@ -105,6 +108,7 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         SettingsHeader(onBack = onBack)
+        ThemeSection(themeMode = themeMode, onSetThemeMode = onSetThemeMode)
         InterceptionStrengthSection(
             status = filterStatus,
             busy = filterBusy,
@@ -152,6 +156,42 @@ fun SettingsScreen(
             onDismiss = onDismissUpdateDialog
         )
     }
+}
+
+/**
+ * The theme choice: three radio rows, applied immediately by the Activity-level theme state and
+ * persisted in [tw.kuies.block.data.AppSettingsStore]. No preview or extra copy.
+ */
+@Composable
+private fun ThemeSection(themeMode: ThemeMode, onSetThemeMode: (ThemeMode) -> Unit) {
+    SectionCard(title = stringResource(R.string.settings_theme_section)) {
+        ThemeMode.entries.forEach { mode ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSetThemeMode(mode) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(
+                    selected = themeMode == mode,
+                    onClick = { onSetThemeMode(mode) }
+                )
+                Text(
+                    text = stringResource(themeModeLabel(mode)),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun themeModeLabel(mode: ThemeMode): Int = when (mode) {
+    ThemeMode.SYSTEM -> R.string.settings_theme_system
+    ThemeMode.LIGHT -> R.string.settings_theme_light
+    ThemeMode.DARK -> R.string.settings_theme_dark
 }
 
 /**
