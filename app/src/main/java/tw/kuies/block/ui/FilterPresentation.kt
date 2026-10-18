@@ -39,6 +39,14 @@ object FilterPresentation {
         FilterMode.CUSTOM -> "自訂"
     }
 
+    /** The concise value shown on a collapsed strength section; the radio keeps the 推薦 hint. */
+    fun modeSummaryLabel(mode: FilterMode): String = when (mode) {
+        FilterMode.RELAXED -> "寬鬆"
+        FilterMode.STANDARD -> "標準"
+        FilterMode.STRICT -> "嚴格"
+        FilterMode.CUSTOM -> "自訂"
+    }
+
     /** A one-line description of what the chosen mode does, so the trade-offs are visible up front. */
     fun modeDetail(mode: FilterMode): String = when (mode) {
         FilterMode.RELAXED -> "固定使用 HaGeZi Multi LIGHT，誤擋機會最低。"

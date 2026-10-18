@@ -350,7 +350,7 @@ private fun InterceptionStrengthSection(
     var expanded by remember { mutableStateOf(false) }
     ExpandableSectionCard(
         title = stringResource(R.string.settings_filter_section),
-        value = status?.let { FilterPresentation.modeLabel(it.mode) }
+        value = status?.let { FilterPresentation.modeSummaryLabel(it.mode) }
             ?: stringResource(R.string.filter_state_label_loading),
         expanded = expanded,
         onToggle = { expanded = !expanded }
