@@ -26,8 +26,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -164,18 +169,31 @@ fun SettingsScreen(
  */
 @Composable
 private fun ThemeSection(themeMode: ThemeMode, onSetThemeMode: (ThemeMode) -> Unit) {
-    SectionCard(title = stringResource(R.string.settings_theme_section)) {
-        ThemeMode.entries.forEach { mode ->
+    var expanded by remember { mutableStateOf(false) }
+    ExpandableSectionCard(
+        title = stringResource(R.string.settings_theme_section),
+        value = stringResource(themeModeLabel(themeMode)),
+        expanded = expanded,
+        onToggle = { expanded = !expanded }
+    ) {
+        // The requested order is SYSTEM, DARK, LIGHT; the enum order is not the display order.
+        listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT).forEach { mode ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onSetThemeMode(mode) }
+                    .clickable {
+                        onSetThemeMode(mode)
+                        expanded = false
+                    }
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 RadioButton(
                     selected = themeMode == mode,
-                    onClick = { onSetThemeMode(mode) }
+                    onClick = {
+                        onSetThemeMode(mode)
+                        expanded = false
+                    }
                 )
                 Text(
                     text = stringResource(themeModeLabel(mode)),
@@ -329,7 +347,14 @@ private fun InterceptionStrengthSection(
     onSelectMode: (FilterMode) -> Unit,
     onSetSourceSelected: (FilterSource, Boolean) -> Unit
 ) {
-    SectionCard(title = stringResource(R.string.settings_filter_section)) {
+    var expanded by remember { mutableStateOf(false) }
+    ExpandableSectionCard(
+        title = stringResource(R.string.settings_filter_section),
+        value = status?.let { FilterPresentation.modeLabel(it.mode) }
+            ?: stringResource(R.string.filter_state_label_loading),
+        expanded = expanded,
+        onToggle = { expanded = !expanded }
+    ) {
         Text(
             text = stringResource(R.string.settings_filter_body),
             style = MaterialTheme.typography.bodySmall,
@@ -341,7 +366,11 @@ private fun InterceptionStrengthSection(
                 // Until the settings have loaded, nothing is marked as the current choice.
                 selected = status != null && status.mode == mode,
                 enabled = !busy,
-                onSelectMode = onSelectMode
+                onSelectMode = { selected ->
+                    onSelectMode(selected)
+                    // Custom keeps the picker open; the three fixed tiers collapse after selection.
+                    if (selected != FilterMode.CUSTOM) expanded = false
+                }
             )
         }
         if (status?.mode == FilterMode.CUSTOM) {
@@ -584,7 +613,9 @@ private fun UpdateAvailableDialog(
     onOpenInstallPermission: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val busy = state is UpdateInstallState.Downloading || state == UpdateInstallState.Verifying
+    val busy = state is UpdateInstallState.Downloading ||
+        state == UpdateInstallState.Verifying ||
+        state == UpdateInstallState.Installing
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = {
@@ -656,6 +687,15 @@ private fun UpdateAvailableDialog(
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
 
+                    UpdateInstallState.Installing -> {
+                        Text(
+                            text = stringResource(R.string.settings_update_installing),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+
                     UpdateInstallState.Ready -> Text(
                         text = stringResource(R.string.settings_update_ready),
                         style = MaterialTheme.typography.bodyMedium,
@@ -687,6 +727,7 @@ private fun UpdateAvailableDialog(
                 }
 
                 UpdateInstallState.Verifying -> Unit
+                UpdateInstallState.Installing -> Unit
 
                 UpdateInstallState.Ready -> Button(onClick = onInstall) {
                     Text(stringResource(R.string.settings_update_install_now))
@@ -709,6 +750,72 @@ private fun UpdateAvailableDialog(
             }
         }
     )
+}
+
+@Composable
+private fun ExpandableSectionCard(
+    title: String,
+    value: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ExpandableHeader(
+                title = title,
+                value = value,
+                expanded = expanded,
+                onToggle = onToggle
+            )
+            if (expanded) content()
+        }
+    }
+}
+
+/** The one header shape shared by the three collapsible settings sections. */
+@Composable
+private fun ExpandableHeader(
+    title: String,
+    value: String,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            painter = painterResource(R.drawable.ic_chevron_right),
+            contentDescription = null,
+            modifier = Modifier.rotate(if (expanded) -90f else 90f),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @Composable
@@ -764,32 +871,50 @@ private fun AutoUpdateControls(
     onSetEnabled: (Boolean) -> Unit,
     onSetInterval: (UpdateInterval) -> Unit
 ) {
-    ToggleRow(
-        label = stringResource(R.string.filter_auto_update_title),
-        checked = settings?.enabled == true,
-        enabled = settings != null,
-        onCheckedChange = onSetEnabled
+    var expanded by remember { mutableStateOf(false) }
+    val enabled = settings?.enabled == true
+    val summary = when {
+        settings == null -> stringResource(R.string.filter_state_label_loading)
+        enabled -> stringResource(
+            R.string.filter_auto_update_on,
+            stringResource(autoUpdateIntervalLabel(settings.interval))
+        )
+        else -> stringResource(R.string.filter_auto_update_off)
+    }
+    ExpandableHeader(
+        title = stringResource(R.string.filter_auto_update_section_title),
+        value = summary,
+        expanded = expanded,
+        onToggle = { expanded = !expanded }
     )
-    Text(
-        text = stringResource(R.string.filter_auto_update_detail),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    // The interval is only a real choice while automatic updates are on, so it is only offered then.
-    if (settings?.enabled == true) {
-        UpdateInterval.entries.forEach { interval ->
-            ChoiceRow(
-                label = stringResource(
-                    when (interval) {
-                        UpdateInterval.HOURS_8 -> R.string.filter_auto_update_interval_8
-                        UpdateInterval.HOURS_24 -> R.string.filter_auto_update_interval_24
-                    }
-                ),
-                selected = settings.interval == interval,
-                onSelect = { onSetInterval(interval) }
-            )
+    if (expanded) {
+        ToggleRow(
+            label = stringResource(R.string.filter_auto_update_toggle),
+            checked = enabled,
+            enabled = settings != null,
+            onCheckedChange = onSetEnabled
+        )
+        Text(
+            text = stringResource(R.string.filter_auto_update_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        // The interval is only a real choice while automatic updates are on, so it is only offered then.
+        if (enabled) {
+            UpdateInterval.entries.forEach { interval ->
+                ChoiceRow(
+                    label = stringResource(autoUpdateIntervalLabel(interval)),
+                    selected = settings?.interval == interval,
+                    onSelect = { onSetInterval(interval) }
+                )
+            }
         }
     }
+}
+
+private fun autoUpdateIntervalLabel(interval: UpdateInterval): Int = when (interval) {
+    UpdateInterval.HOURS_8 -> R.string.filter_auto_update_interval_8
+    UpdateInterval.HOURS_24 -> R.string.filter_auto_update_interval_24
 }
 
 /**

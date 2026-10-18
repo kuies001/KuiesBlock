@@ -59,6 +59,7 @@
     <string name="settings_update_progress">%1$d%%</string>
     <string name="settings_update_cancel">取消下載</string>
     <string name="settings_update_verifying">正在驗證更新檔</string>
+    <string name="settings_update_installing">正在準備安裝</string>
     <string name="settings_update_ready">下載完成，準備安裝</string>
     <string name="settings_update_install_now">開啟安裝</string>
     <string name="settings_update_retry">重試</string>
@@ -83,6 +84,10 @@
 
     <!-- 自動更新只處理「已下載過」的清單，且系統可能延後執行，文案必須照實說。 -->
     <string name="filter_auto_update_title">自動更新</string>
+    <string name="filter_auto_update_section_title">過濾器自動更新</string>
+    <string name="filter_auto_update_toggle">自動更新過濾器</string>
+    <string name="filter_auto_update_on">已開啟 · %1$s</string>
+    <string name="filter_auto_update_off">已關閉</string>
     <string name="filter_auto_update_detail">只更新已下載的清單；系統可能延後執行。</string>
     <string name="filter_auto_update_interval_8">每 8 小時</string>
     <string name="filter_auto_update_interval_24">每 24 小時</string>

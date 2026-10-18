@@ -9,6 +9,9 @@ sealed interface UpdateInstallState {
 
     data object Verifying : UpdateInstallState
 
+    /** The verified APK is being written into a PackageInstaller session. */
+    data object Installing : UpdateInstallState
+
     /** The APK passed every check; the system installer has been or can be opened. */
     data object Ready : UpdateInstallState
 
@@ -36,6 +39,14 @@ enum class UpdateInstallFailure(val message: String) {
         "目前安裝的版本使用不同簽章，Android 無法直接覆蓋。請改用相同簽章的版本，資料不會被清除。"
     ),
     INSTALL_PERMISSION_REQUIRED("需要允許 KuiesBlock 安裝未知來源 App。"),
-    INSTALLER_UNAVAILABLE("找不到 Android 系統安裝器。"),
+    INSTALLER_UNAVAILABLE("無法開啟 Android 安裝流程。"),
+    INSTALL_CANCELLED("已取消安裝。"),
+    INSTALL_BLOCKED("Android 已封鎖這次安裝。"),
+    INSTALL_CONFLICT("更新檔與目前版本衝突。"),
+    INSTALL_INCOMPATIBLE("更新檔與這個 Android 版本不相容。"),
+    INSTALL_INVALID("更新檔無效或已損毀。"),
+    INSTALL_STORAGE("裝置儲存空間不足。"),
+    INSTALL_TIMEOUT("安裝逾時，請稍後再試。"),
+    INSTALL_FAILED("Android 安裝失敗，請稍後再試。"),
     UNKNOWN("更新失敗，請稍後再試。")
 }
