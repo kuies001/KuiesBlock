@@ -22,6 +22,12 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+      Android 8+ requires the user's consent before an app can hand an APK to the system installer.
+      The permission only opens the system confirmation flow; it never installs silently.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       The per-app page lists user-visible launcher apps. Query only that intent instead of requesting
       QUERY_ALL_PACKAGES; apps without a launcher entry are intentionally not offered.
     -->
@@ -53,6 +59,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          The downloaded APK stays in the app's private cache. FileProvider hands the system installer
+          a one-time readable URI only after the download, checksum and signature checks succeeded.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
 
         <!--
           VpnService is bound by the system, so it must not be exported to other

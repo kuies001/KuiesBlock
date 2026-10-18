@@ -19,6 +19,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
@@ -40,6 +41,7 @@ import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.update.ReleaseInfo
 import tw.kuies.block.update.UpdateCheckOutcome
+import tw.kuies.block.update.UpdateInstallState
 import tw.kuies.block.update.UpdatePresentation
 
 /**
@@ -83,10 +85,14 @@ fun SettingsScreen(
     appUpdateChecking: Boolean,
     /** The release to offer in the update dialog, or null when there is nothing to show. */
     pendingUpdate: ReleaseInfo?,
+    /** What the in-app download is doing for [pendingUpdate]. */
+    updateInstallState: UpdateInstallState,
     onCheckAppUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onCancelUpdateDownload: () -> Unit,
+    onInstallVerifiedUpdate: () -> Unit,
+    onOpenInstallPermission: () -> Unit,
     onDismissUpdateDialog: () -> Unit,
-    /** Opens [String], which the caller validates again before it ever reaches the browser. */
-    onOpenReleasePage: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -138,8 +144,12 @@ fun SettingsScreen(
         UpdateAvailableDialog(
             release = release,
             currentVersion = appVersion,
-            onDismiss = onDismissUpdateDialog,
-            onOpenRelease = onOpenReleasePage
+            state = updateInstallState,
+            onDownload = onDownloadUpdate,
+            onCancelDownload = onCancelUpdateDownload,
+            onInstall = onInstallVerifiedUpdate,
+            onOpenInstallPermission = onOpenInstallPermission,
+            onDismiss = onDismissUpdateDialog
         )
     }
 }
@@ -517,24 +527,26 @@ private fun AboutSection(
 }
 
 /**
- * The offer shown when a newer stable release exists: its version, the installed one, its notes, and
- * the two answers a user can give.
+ * The update offer: version, notes, and the in-app download/verify/install phases.
  *
- * 前往下載 is offered only when the release's own address is this project's GitHub page — the address is
- * data from the network, so [UpdatePresentation.downloadableUrl] vets it — and it opens that page in the
- * browser. Nothing is downloaded, installed or reconfigured from here: no APK is fetched, no unknown
- * sources permission is asked for, and the VPN is never touched.
+ * The APK is fetched only after the user taps 下載並更新, and the system installer is opened only after
+ * the download passed the checksum, package, version and signing checks. Nothing here stops or
+ * rebuilds the VPN, and cancelling a download only removes its own cache file.
  */
 @Composable
 private fun UpdateAvailableDialog(
     release: ReleaseInfo,
     currentVersion: String,
-    onDismiss: () -> Unit,
-    onOpenRelease: (String) -> Unit
+    state: UpdateInstallState,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenInstallPermission: () -> Unit,
+    onDismiss: () -> Unit
 ) {
-    val downloadUrl = UpdatePresentation.downloadableUrl(release)
+    val busy = state is UpdateInstallState.Downloading || state == UpdateInstallState.Verifying
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = {
             Text(
                 text = stringResource(
@@ -570,18 +582,90 @@ private fun UpdateAvailableDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                when (state) {
+                    UpdateInstallState.Idle -> Unit
+
+                    is UpdateInstallState.Downloading -> {
+                        Text(
+                            text = stringResource(R.string.settings_update_downloading),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        val percent = state.percent
+                        if (percent != null) {
+                            LinearProgressIndicator(
+                                progress = { percent / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_update_progress, percent),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    UpdateInstallState.Verifying -> {
+                        Text(
+                            text = stringResource(R.string.settings_update_verifying),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+
+                    UpdateInstallState.Ready -> Text(
+                        text = stringResource(R.string.settings_update_ready),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    UpdateInstallState.NeedsInstallPermission -> Text(
+                        text = stringResource(R.string.settings_update_permission_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    is UpdateInstallState.Failed -> Text(
+                        text = state.reason.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         },
         confirmButton = {
-            if (downloadUrl != null) {
-                Button(onClick = { onOpenRelease(downloadUrl) }) {
+            when (state) {
+                UpdateInstallState.Idle -> Button(onClick = onDownload) {
                     Text(stringResource(R.string.settings_update_dialog_download))
+                }
+
+                is UpdateInstallState.Downloading -> TextButton(onClick = onCancelDownload) {
+                    Text(stringResource(R.string.settings_update_cancel))
+                }
+
+                UpdateInstallState.Verifying -> Unit
+
+                UpdateInstallState.Ready -> Button(onClick = onInstall) {
+                    Text(stringResource(R.string.settings_update_install_now))
+                }
+
+                UpdateInstallState.NeedsInstallPermission -> Button(onClick = onOpenInstallPermission) {
+                    Text(stringResource(R.string.settings_update_open_install_settings))
+                }
+
+                is UpdateInstallState.Failed -> Button(onClick = onDownload) {
+                    Text(stringResource(R.string.settings_update_retry))
                 }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.settings_update_dialog_later))
+            if (!busy) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.settings_update_dialog_later))
+                }
             }
         }
     )
