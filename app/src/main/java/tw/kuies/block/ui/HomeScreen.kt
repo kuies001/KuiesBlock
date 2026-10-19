@@ -20,6 +20,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import tw.kuies.block.R
 import tw.kuies.block.core.ProtectionError
 import tw.kuies.block.core.ProtectionState
+import tw.kuies.block.dns.DnsFallbackStatus
 
 /**
  * The whole home screen: the app name, the shield, the protection status, the one button that
@@ -51,6 +53,9 @@ fun HomeScreen(
     protectionState: ProtectionState,
     protectionError: ProtectionError?,
     isServiceRunning: Boolean = false,
+    dnsFallbackEnabled: Boolean,
+    dnsFallbackStatus: DnsFallbackStatus,
+    onSetDnsFallbackEnabled: (Boolean) -> Unit,
     onToggleProtection: () -> Unit,
     onOpenAppProtection: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -74,6 +79,14 @@ fun HomeScreen(
         )
 
         AppProtectionEntry(onOpen = onOpenAppProtection)
+
+        DnsFallbackCard(
+            enabled = dnsFallbackEnabled,
+            status = dnsFallbackStatus,
+            protectionState = protectionState,
+            isServiceRunning = isServiceRunning,
+            onSetEnabled = onSetDnsFallbackEnabled
+        )
 
         BenefitsCard()
     }
@@ -270,6 +283,72 @@ private fun AppProtectionEntry(onOpen: () -> Unit) {
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The DNS backup card: one switch, one live status line and one fixed explanation.
+ *
+ * The status comes from the service's verified upstream, never from the switch alone; the
+ * presentation object suppresses any claim while protection is stopped or still starting.
+ */
+@Composable
+private fun DnsFallbackCard(
+    enabled: Boolean,
+    status: DnsFallbackStatus,
+    protectionState: ProtectionState,
+    isServiceRunning: Boolean,
+    onSetEnabled: (Boolean) -> Unit
+) {
+    val tone = DnsFallbackPresentation.tone(
+        protectionState = protectionState,
+        isServiceRunning = isServiceRunning,
+        enabled = enabled,
+        status = status
+    )
+    val statusColor = when (tone) {
+        DnsFallbackTone.SUCCESS -> MaterialTheme.colorScheme.primary
+        DnsFallbackTone.WARNING -> MaterialTheme.colorScheme.secondary
+        DnsFallbackTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
+        DnsFallbackTone.ERROR -> MaterialTheme.colorScheme.error
+        DnsFallbackTone.MUTED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.dns_fallback_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(checked = enabled, onCheckedChange = onSetEnabled)
+            }
+            Text(
+                text = DnsFallbackPresentation.statusText(
+                    protectionState = protectionState,
+                    isServiceRunning = isServiceRunning,
+                    enabled = enabled,
+                    status = status
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = statusColor
+            )
+            Text(
+                text = stringResource(R.string.dns_fallback_body),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

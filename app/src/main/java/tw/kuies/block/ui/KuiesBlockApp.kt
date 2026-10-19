@@ -155,6 +155,11 @@ fun KuiesBlockApp(
     var bootAutostart by remember { mutableStateOf(false) }
     var alwaysOnVpn by remember { mutableStateOf(false) }
 
+    // The DNS backup switch, read once at composition and then kept in step with the store.
+    var dnsFallbackEnabled by remember {
+        mutableStateOf(settingsStore.load().dnsAutoFallbackEnabled)
+    }
+
     // The manual app-update check: whether one is running, what the last one found, and the release
     // still being offered in a dialog. Kept in memory only — a check is never stored, never scheduled
     // and never runs on its own.
@@ -445,6 +450,7 @@ fun KuiesBlockApp(
         // Re-read on every resume: the strength section must never describe a Private DNS mode the
         // user has already changed in Android's settings and come back from.
         privateDnsMode = PrivateDnsSettings.read(appContext).mode
+        dnsFallbackEnabled = settingsStore.load().dnsAutoFallbackEnabled
         // Read-only probe for the guide's plain notice; it never stops or reconfigures that VPN.
         anotherVpnActive = OtherVpnProbe.anotherVpnHoldsTheSlot(appContext, KuiesVpnService.isRunning)
         // Re-read on every resume: the user may have turned Android's Always-on VPN on or off in the
@@ -548,6 +554,21 @@ fun KuiesBlockApp(
     fun setBootAutostart(enabled: Boolean) {
         protectionIntentStore.setBootAutostartEnabled(enabled)
         bootAutostart = enabled
+    }
+
+    /**
+     * Stores the DNS backup choice and asks a running tunnel to apply it.
+     *
+     * The switch is persisted first, so a stopped tunnel reads the same answer when it next starts.
+     * A running tunnel verifies the primary before leaving the backup; it never keeps using a
+     * backup the user just switched off.
+     */
+    fun setDnsFallbackEnabled(enabled: Boolean) {
+        settingsStore.setDnsAutoFallbackEnabled(enabled)
+        dnsFallbackEnabled = enabled
+        if (KuiesVpnService.isRunning) {
+            KuiesVpnService.notifyDnsFallbackSettingChanged(appContext)
+        }
     }
 
     /**
@@ -746,6 +767,9 @@ fun KuiesBlockApp(
             protectionState = protectionState,
             protectionError = protectionError,
             isServiceRunning = KuiesVpnService.isRunning,
+            dnsFallbackEnabled = dnsFallbackEnabled,
+            dnsFallbackStatus = ProtectionStatusHolder.dnsFallbackStatus,
+            onSetDnsFallbackEnabled = { enabled -> setDnsFallbackEnabled(enabled) },
             onToggleProtection = { onToggleProtection() },
             onOpenAppProtection = {
                 appProtectionReturnTo = BlockDestination.HOME

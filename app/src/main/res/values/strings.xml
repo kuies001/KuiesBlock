@@ -30,6 +30,10 @@
     <string name="home_app_settings_title">App 個別設定</string>
     <string name="home_app_settings_body">選擇哪些 App 不使用 KuiesBlock 防護</string>
 
+    <!-- 首頁的 DNS 自動備援卡片。說明文字為需求指定，不可改寫。 -->
+    <string name="dns_fallback_title">DNS 自動備援</string>
+    <string name="dns_fallback_body">這將保護你的連線，當DNS異常時，仍能上網與攔截廣告</string>
+
     <!-- 首頁的「使用優點」區塊。文案只描述可能效益，不宣稱必然結果、也不使用未經實測的百分比。 -->
     <string name="home_benefit_blocking_title">阻擋廣告</string>
     <string name="home_benefit_blocking_body">減少廣告載入，有助節省流量與降低耗電。</string>
@@ -42,7 +46,7 @@
     <string name="settings_guide_body">第一次使用的兩個步驟：授權 VPN、開啟防護。隨時可以再回來看一次，不會改變任何設定。</string>
     <string name="action_replay_guide">重新觀看使用教學</string>
     <string name="settings_privacy_section">隱私</string>
-    <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。</string>
+    <string name="settings_privacy_body">KuiesBlock 不建立帳號、不收集個人資訊，也不保存瀏覽紀錄；只保留每日的查詢與失敗次數。設定與統計已排除於備份與裝置移轉之外。主要 DNS 無法使用時，可能透過 Cloudflare 加密 DNS 進行解析。</string>
     <string name="settings_about_section">關於</string>
 
     <!-- 檢查 App 更新：手動查詢 GitHub 最新正式版本，不自動檢查、不自動安裝。 -->
