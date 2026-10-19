@@ -6,6 +6,27 @@ enum class DnsUpstreamRole { PRIMARY, BACKUP }
 /** What the home screen may say about the upstream, once protection is actually active. */
 enum class DnsFallbackStatus { PRIMARY, BACKUP, SWITCHING, UNAVAILABLE, DISABLED }
 
+/**
+ * Which upstream a query may use, if any.
+ *
+ * Fail-open means "stop intercepting": a query that was already in flight must not be sent to a
+ * transport we are abandoning. Turning the backup off while it carries traffic is the same
+ * situation: the primary is being verified, so the backup must not keep answering in the meantime.
+ * A null result tells the service to answer SERVFAIL and let the tunnel close.
+ */
+object DnsUpstreamServingPolicy {
+
+    fun servingRole(
+        failingOpen: Boolean,
+        enabled: Boolean,
+        activeRole: DnsUpstreamRole
+    ): DnsUpstreamRole? = when {
+        failingOpen -> null
+        !enabled && activeRole == DnsUpstreamRole.BACKUP -> null
+        else -> activeRole
+    }
+}
+
 /** What the service has to do after a state transition. */
 enum class DnsFallbackDecision {
     NONE,

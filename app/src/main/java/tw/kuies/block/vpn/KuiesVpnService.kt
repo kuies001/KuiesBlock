@@ -55,6 +55,7 @@ import tw.kuies.block.dns.DnsFallbackPolicy
 import tw.kuies.block.dns.DnsFallbackStatus
 import tw.kuies.block.dns.DnsProtocol
 import tw.kuies.block.dns.DnsUpstreamRole
+import tw.kuies.block.dns.DnsUpstreamServingPolicy
 import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.dns.message.DnsMessageReader
 import tw.kuies.block.dns.message.DnsMessageWriter
@@ -898,7 +899,17 @@ class KuiesVpnService : VpnService() {
             return
         }
         val machine = fallback
-        val role = machine?.activeRole ?: DnsUpstreamRole.PRIMARY
+        val role = DnsUpstreamServingPolicy.servingRole(
+            failingOpen = failingOpen,
+            enabled = machine?.enabled ?: true,
+            activeRole = machine?.activeRole ?: DnsUpstreamRole.PRIMARY
+        )
+        if (role == null) {
+            // Fail-open has begun, or the user just turned the backup off: never keep a disabled
+            // upstream in service while the tunnel is being closed.
+            writeBack(query, servfail(query))
+            return
+        }
         val currentTransport = transportFor(role)
         if (currentTransport == null) {
             writeBack(query, servfail(query))
@@ -1398,7 +1409,22 @@ class KuiesVpnService : VpnService() {
             getString(R.string.notification_stopped_title),
             getString(R.string.notification_stopped_text, errorText(error))
         )
-        mainHandler.post { stopSelf() }
+        mainHandler.post { failOpenAndStop() }
+    }
+
+    /**
+     * Closes the tunnel before stopping.
+     *
+     * `stopSelf()` alone is not enough: while the tunnel is established the system keeps the
+     * VpnService bound, so `onDestroy()` — and therefore `teardown()` — may never run. Closing the
+     * tun descriptor here is what removes the VPN network and stops us intercepting DNS.
+     */
+    private fun failOpenAndStop() {
+        teardown()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        val finalState = stopState ?: ProtectionStateRules.afterFailure()
+        ProtectionStatusHolder.update(finalState, stopError, activeDnsPath)
+        stopSelf()
     }
 
     private fun errorText(error: ProtectionError): String = getString(
