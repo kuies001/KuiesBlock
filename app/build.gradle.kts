@@ -28,8 +28,8 @@ android {
         applicationId = "tw.kuies.block"
         minSdk = 28
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.4.43"
+        versionCode = 14
+        versionName = "0.4.50"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
