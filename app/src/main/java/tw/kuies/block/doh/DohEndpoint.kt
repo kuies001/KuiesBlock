@@ -21,6 +21,17 @@ object DohEndpointPolicy {
 
     const val TLS_PORT = 443
 
+    /**
+     * The encrypted backup upstream. Fixed on purpose: it is only used after the primary has
+     * already failed several real round trips, and it is never configurable from the UI.
+     */
+    val CLOUDFLARE_FALLBACK = DohEndpoint(
+        url = "https://cloudflare-dns.com/dns-query",
+        host = "cloudflare-dns.com",
+        port = TLS_PORT
+    )
+
+
     fun build(config: DnsConfig): DohEndpointOutcome {
         if (config.protocol != DnsProtocol.DOH) {
             return DohEndpointOutcome.Invalid(DohFailure.PROTOCOL_NOT_DOH)

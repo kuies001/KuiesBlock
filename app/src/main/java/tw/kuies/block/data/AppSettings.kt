@@ -38,5 +38,13 @@ data class AppSettings(
     val protectionStarted: Boolean = false,
 
     /** The user's theme choice; [ThemeMode.SYSTEM] for a new or older install with no value stored. */
-    val themeMode: ThemeMode = ThemeMode.SYSTEM
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+
+    /**
+     * Whether the encrypted backup DNS may take over when the primary is unreachable.
+     *
+     * On for a new install and for an install upgrading from a version that never stored it, so the
+     * reliability improvement applies without asking; only an explicit switch-off turns it off.
+     */
+    val dnsAutoFallbackEnabled: Boolean = true
 )

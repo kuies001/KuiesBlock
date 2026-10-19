@@ -23,7 +23,9 @@ class AppSettingsStore(private val prefs: SharedPreferences) {
         vpnAuthorizationRecorded = prefs.contains(KEY_VPN_AUTHORIZED),
         onboardingState = OnboardingState.fromId(prefs.getString(KEY_ONBOARDING_STATE, null)),
         protectionStarted = prefs.getBoolean(KEY_PROTECTION_STARTED, false),
-        themeMode = ThemeMode.fromId(prefs.getString(KEY_THEME_MODE, null))
+        themeMode = ThemeMode.fromId(prefs.getString(KEY_THEME_MODE, null)),
+        // Absent means the install never had the choice, so it gets the safer default.
+        dnsAutoFallbackEnabled = prefs.getBoolean(KEY_DNS_AUTO_FALLBACK_ENABLED, true)
     )
 
     fun setVpnAuthorizationGranted(granted: Boolean) {
@@ -56,11 +58,17 @@ class AppSettingsStore(private val prefs: SharedPreferences) {
         prefs.edit().putString(KEY_THEME_MODE, mode.id).apply()
     }
 
+    /** Stores the DNS backup choice; absent reads back as enabled. */
+    fun setDnsAutoFallbackEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_DNS_AUTO_FALLBACK_ENABLED, enabled).apply()
+    }
+
     companion object {
         const val PREFS_NAME = "kuies_block_settings"
         private const val KEY_VPN_AUTHORIZED = "vpn_authorization_granted"
         private const val KEY_ONBOARDING_STATE = "onboarding_state"
         private const val KEY_PROTECTION_STARTED = "protection_started"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_DNS_AUTO_FALLBACK_ENABLED = "dns_auto_fallback_enabled"
     }
 }

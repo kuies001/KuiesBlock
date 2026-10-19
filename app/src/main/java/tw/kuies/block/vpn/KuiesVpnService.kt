@@ -36,7 +36,6 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 import tw.kuies.block.R
 import tw.kuies.block.core.DnsPath
@@ -46,10 +45,16 @@ import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
 import tw.kuies.block.data.AppExclusionApplyStatus
 import tw.kuies.block.data.AppExclusionStore
+import tw.kuies.block.data.AppSettingsStore
 import tw.kuies.block.data.DnsStatsRepository
 import tw.kuies.block.dns.DnsConfig
 import tw.kuies.block.dns.DnsConfigStore
+import tw.kuies.block.dns.DnsFallbackDecision
+import tw.kuies.block.dns.DnsFallbackMachine
+import tw.kuies.block.dns.DnsFallbackPolicy
+import tw.kuies.block.dns.DnsFallbackStatus
 import tw.kuies.block.dns.DnsProtocol
+import tw.kuies.block.dns.DnsUpstreamRole
 import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.dns.message.DnsMessageReader
 import tw.kuies.block.dns.message.DnsMessageWriter
@@ -94,10 +99,34 @@ class KuiesVpnService : VpnService() {
     private val notifications by lazy { VpnNotifications(this) }
     private val random = Random(System.nanoTime())
     private val writeLock = Any()
-    private val consecutiveFailures = AtomicInteger(0)
     private val loggedDrops = ConcurrentHashMap.newKeySet<PacketDropReason>()
     private val loggedDropDetails = ConcurrentHashMap.newKeySet<String>()
     private val verificationInFlight = AtomicBoolean(false)
+
+    /** Guards the one backup round trip and the one primary probe that may run at a time. */
+    private val backupProbeInFlight = AtomicBoolean(false)
+    private val recoveryProbeInFlight = AtomicBoolean(false)
+    private val disableVerifyInFlight = AtomicBoolean(false)
+
+    /**
+     * The primary/backup decision for this tunnel generation. Replaced only by a restart, never by a
+     * network change, so switching the upstream never rebuilds the tunnel.
+     */
+    @Volatile
+    private var fallback: DnsFallbackMachine? = null
+
+    @Volatile
+    private var backupTransport: DohTransport? = null
+
+    /** Set when a start already spent its primary attempts and moved on to the backup. */
+    private var startupTriedBackup = false
+
+    /**
+     * Set by [requestFailOpen]. A late probe result must not be able to turn a failed start back
+     * into 「防護已啟用」 after the decision to fail open was already made.
+     */
+    @Volatile
+    private var failingOpen = false
 
     /** Which DNS path this run actually installed; reported to the UI so it never overclaims. */
     private var activeDnsPath: DnsPath = DnsPath.INTERCEPTED
@@ -114,6 +143,9 @@ class KuiesVpnService : VpnService() {
     private val startupWatchdog = Runnable {
         if (running && ProtectionStatusHolder.state == ProtectionState.STARTING) {
             Log.w(TAG, "Startup budget exhausted without a verified DNS round trip.")
+            if (fallback?.enabled == true) {
+                announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            }
             requestFailOpen(ProtectionError.DNS_TIMEOUT)
         }
     }
@@ -135,6 +167,12 @@ class KuiesVpnService : VpnService() {
     private val exclusionRebuildRunner = Runnable {
         if (running) restartTunnel()
     }
+
+    /** The user moved the backup switch while protection was running. */
+    private val dnsFallbackSettingRunner = Runnable { applyDnsFallbackSetting() }
+
+    /** The low-frequency probe that checks whether the primary can be trusted again. */
+    private val recoveryProbeRunner = Runnable { probePrimaryForRecovery() }
 
     // Written on the main thread, read from the reader and worker threads.
     @Volatile
@@ -222,6 +260,15 @@ class KuiesVpnService : VpnService() {
             }
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_DNS_FALLBACK_CHANGED) {
+            // The switch may be moved more than once quickly; only the last value matters and the
+            // service reads it from the store, so bursts collapse into one evaluation.
+            if (running) {
+                mainHandler.removeCallbacks(dnsFallbackSettingRunner)
+                mainHandler.postDelayed(dnsFallbackSettingRunner, DNS_FALLBACK_CHANGE_DEBOUNCE_MILLIS)
+            }
+            return START_NOT_STICKY
+        }
         if (!VpnAuthorization.isGranted(this)) {
             Log.w(TAG, "Start requested without VPN authorization; not starting protection.")
             authorizationRevoked = true
@@ -251,6 +298,13 @@ class KuiesVpnService : VpnService() {
         }
         // One generation per start attempt: async results tagged with an older one are discarded.
         tunnelGeneration++
+        failingOpen = false
+        startupTriedBackup = false
+        val fallbackMachine = DnsFallbackMachine(
+            AppSettingsStore(this).load().dnsAutoFallbackEnabled
+        )
+        fallback = fallbackMachine
+        ProtectionStatusHolder.updateDnsFallback(fallbackMachine.status)
         val timeline = StartupTimeline { SystemClock.elapsedRealtime() }
         startupTimeline = timeline
         startupBudget = StartupBudget(STARTUP_TOTAL_TIMEOUT_MILLIS) { SystemClock.elapsedRealtime() }
@@ -289,6 +343,14 @@ class KuiesVpnService : VpnService() {
             return
         }
         transport = created
+        // The backup is created but never contacted until the primary actually fails; building an
+        // OkHttp client opens no socket, so keeping it ready costs no network traffic.
+        if (fallbackMachine.enabled) {
+            backupTransport = createBackupTransport(underlying.dnsServers)
+            if (backupTransport == null) {
+                Log.w(TAG, "The backup DoH transport could not be created; only fail-open remains.")
+            }
+        }
         timeline.mark("transportReady")
 
         val plan = VpnRoutePlan.DEFAULT
@@ -532,6 +594,46 @@ class KuiesVpnService : VpnService() {
         override fun protect(socket: DatagramSocket): Boolean = this@KuiesVpnService.protect(socket)
     }
 
+    /**
+     * The fixed Cloudflare DoH transport.
+     *
+     * It resolves through the same protected plain-DNS bootstrap as the primary, so the lookup of the
+     * backup host cannot re-enter our own tunnel, and it keeps TLS/certificate validation at OkHttp's
+     * defaults. Its timeouts are shorter than the primary's: the backup is only contacted when the
+     * user is already offline from the primary's point of view.
+     */
+    private fun createBackupTransport(dnsServers: List<InetSocketAddress>): DohTransport? {
+        val protector = socketProtector()
+        val bootstrap = PlainDnsBootstrap(protector, dnsServers)
+        return try {
+            OkHttpDohTransport(
+                endpoint = DohEndpointPolicy.CLOUDFLARE_FALLBACK,
+                protector = protector,
+                resolver = HostnameResolver { host -> bootstrap.resolve(host) },
+                callTimeoutMillis = BACKUP_CALL_TIMEOUT_MILLIS,
+                connectTimeoutMillis = BACKUP_CONNECT_TIMEOUT_MILLIS,
+                readTimeoutMillis = BACKUP_READ_TIMEOUT_MILLIS
+            )
+        } catch (exception: Exception) {
+            Log.w(TAG, "Could not create the backup DoH transport: ${exception.javaClass.simpleName}")
+            null
+        }
+    }
+
+    /** The DNS servers of the network the tunnel is currently using, for a new bootstrap. */
+    private fun currentBootstrapDnsServers(): List<InetSocketAddress> =
+        appliedUnderlying?.dnsServers
+            ?: startupUnderlying?.dnsServers
+            ?: detectedUnderlying.values.firstOrNull()?.dnsServers
+            ?: emptyList()
+
+    /** Releases the backup client once the user has switched the feature off. */
+    private fun closeBackupTransport() {
+        val old = backupTransport ?: return
+        backupTransport = null
+        Thread({ runCatching { old.close() } }, "kuies-backup-disable").start()
+    }
+
     private fun newWorkerPool(): ThreadPoolExecutor = ThreadPoolExecutor(
         WORKER_THREADS,
         WORKER_THREADS,
@@ -668,13 +770,24 @@ class KuiesVpnService : VpnService() {
 
     private fun rebuildTransport(dnsServers: List<InetSocketAddress>) {
         val oldTransport = transport
+        val oldBackup = backupTransport
         val newTransport = createTransport(dnsServers)
+        val newBackup = if (fallback?.enabled == true) createBackupTransport(dnsServers) else null
         if (oldTransport != null) {
             Thread({ runCatching { oldTransport.close() } }, "kuies-transport-rebuild").start()
         }
+        if (oldBackup != null) {
+            Thread({ runCatching { oldBackup.close() } }, "kuies-backup-rebuild").start()
+        }
         transport = newTransport
+        backupTransport = newBackup
         if (newTransport == null) {
             requestFailOpen(ProtectionError.ENDPOINT_NOT_DOH)
+            return
+        }
+        if (fallback?.activeRole == DnsUpstreamRole.BACKUP && newBackup == null) {
+            Log.w(TAG, "The backup transport could not follow the new network.")
+            requestFailOpen(ProtectionError.DNS_UNREACHABLE)
             return
         }
         if (ProtectionStatusHolder.state == ProtectionState.STARTING) {
@@ -685,6 +798,7 @@ class KuiesVpnService : VpnService() {
                 return
             }
             probeAttempts = 0
+            startupTriedBackup = false
             verifyDnsRoundTrip()
         }
     }
@@ -783,35 +897,49 @@ class KuiesVpnService : VpnService() {
             writeBack(query, localReply)
             return
         }
-        val currentTransport = transport
+        val machine = fallback
+        val role = machine?.activeRole ?: DnsUpstreamRole.PRIMARY
+        val currentTransport = transportFor(role)
         if (currentTransport == null) {
             writeBack(query, servfail(query))
-            onTransportFailure(DohFailure.CONNECT_FAILED)
+            onTransportFailure(role, DohFailure.CONNECT_FAILED)
             return
         }
         when (val result = currentTransport.exchange(query.queryBytes)) {
             is DohResult.Failure -> {
-                Log.w(TAG, "DoH exchange failed: ${result.failure}")
+                Log.w(TAG, "DoH exchange failed on $role: ${result.failure}")
                 writeBack(query, servfail(query))
-                onTransportFailure(result.failure)
+                onTransportFailure(role, result.failure)
             }
             is DohResult.Success -> {
-                consecutiveFailures.set(0)
-                val mtu = routePlan?.mtu ?: DEFAULT_MTU
-                val budget = DnsReplyPolicy.udpPayloadBudget(
-                    query.ednsUdpPayloadSize,
-                    DnsReplyPolicy.ipv4UdpBudget(mtu)
-                )
-                val payload = if (DnsReplyPolicy.fitsInUdp(result.responseBytes.size, budget)) {
-                    result.responseBytes
-                } else {
-                    // DNS-over-TCP is not proxied, so a truncated reply is the honest answer: it
-                    // tells the client the answer was too large instead of inventing one.
-                    DnsMessageWriter.truncated(query.queryBytes, query.queryLength)
+                if (machine?.onQuerySuccess(role) ==
+                    DnsFallbackDecision.CANCELLED_BACKUP_PROBE
+                ) {
+                    announceFallback(machine.status)
                 }
-                writeBack(query, payload)
+                writeUpstreamResponse(query, result.responseBytes)
             }
         }
+    }
+
+    private fun transportFor(role: DnsUpstreamRole): DohTransport? =
+        if (role == DnsUpstreamRole.BACKUP) backupTransport else transport
+
+    /** Writes an upstream answer, truncating it honestly when it cannot fit the tunnel's MTU. */
+    private fun writeUpstreamResponse(query: TunnelDnsQuery, responseBytes: ByteArray) {
+        val mtu = routePlan?.mtu ?: DEFAULT_MTU
+        val budget = DnsReplyPolicy.udpPayloadBudget(
+            query.ednsUdpPayloadSize,
+            DnsReplyPolicy.ipv4UdpBudget(mtu)
+        )
+        val payload = if (DnsReplyPolicy.fitsInUdp(responseBytes.size, budget)) {
+            responseBytes
+        } else {
+            // DNS-over-TCP is not proxied, so a truncated reply is the honest answer: it tells the
+            // client the answer was too large instead of inventing one.
+            DnsMessageWriter.truncated(query.queryBytes, query.queryLength)
+        }
+        writeBack(query, payload)
     }
 
     private fun servfail(query: TunnelDnsQuery): ByteArray =
@@ -852,12 +980,25 @@ class KuiesVpnService : VpnService() {
         }
     }
 
-    private fun onTransportFailure(failure: DohFailure) {
+    private fun onTransportFailure(role: DnsUpstreamRole, failure: DohFailure) {
         DnsStatsRepository.recordFailure()
-        val count = consecutiveFailures.incrementAndGet()
-        if (count >= FAILURE_THRESHOLD) {
-            Log.w(TAG, "DoH failed $count times in a row; restoring the normal network.")
+        val machine = fallback
+        if (machine == null) {
+            // Never silently keep sending to a path we cannot classify.
             requestFailOpen(failure.toProtectionError())
+            return
+        }
+        when (machine.onQueryFailure(role, SystemClock.elapsedRealtime())) {
+            DnsFallbackDecision.TRY_BACKUP -> {
+                Log.w(TAG, "Primary DoH kept failing; verifying the encrypted backup.")
+                announceFallback(machine.status)
+                probeBackupAndSwitch()
+            }
+            DnsFallbackDecision.FAIL_OPEN -> {
+                announceFallback(machine.status)
+                requestFailOpen(failure.toProtectionError())
+            }
+            else -> Unit
         }
     }
 
@@ -871,6 +1012,9 @@ class KuiesVpnService : VpnService() {
         }
         if (startupBudget?.isExhausted() == true) {
             Log.w(TAG, "Startup budget already exhausted before a verification attempt.")
+            if (fallback?.enabled == true) {
+                announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            }
             requestFailOpen(ProtectionError.DNS_TIMEOUT)
             return
         }
@@ -887,35 +1031,45 @@ class KuiesVpnService : VpnService() {
                 val result = transport?.exchange(probeQuery())
                 val attemptMillis = SystemClock.elapsedRealtime() - attemptStartedAt
                 mainHandler.post {
-                    verificationInFlight.set(false)
                     // A result from a tunnel that has already been replaced must not touch this one.
-                    if (generation != tunnelGeneration) return@post
-                    if (!running) return@post
+                    if (generation != tunnelGeneration || !running || failingOpen) {
+                        verificationInFlight.set(false)
+                        return@post
+                    }
                     logStartupDebug(
                         "dnsVerify attempt=$attemptNumber durationMs=$attemptMillis result=${describeOutcome(result)}"
                     )
                     when (result) {
                         is DohResult.Success -> {
-                            consecutiveFailures.set(0)
-                            startupTimeline?.mark("dnsVerified")
-                            mainHandler.removeCallbacks(startupWatchdog)
-                            ProtectionStatusHolder.update(
-                                ProtectionStateRules.afterDnsVerified(),
-                                null,
-                                activeDnsPath
-                            )
-                            notifications.updateOngoing(
-                                getString(R.string.notification_active_title),
-                                getString(R.string.notification_active_text)
-                            )
-                            Log.i(
-                                TAG,
-                                "DNS round trip verified; protection is active (dnsPath=${activeDnsPath.name})."
-                            )
-                            logStartupSummary()
+                            verificationInFlight.set(false)
+                            if (fallback?.onQuerySuccess(DnsUpstreamRole.PRIMARY) ==
+                                DnsFallbackDecision.CANCELLED_BACKUP_PROBE
+                            ) {
+                                announceFallback(DnsFallbackStatus.PRIMARY)
+                            }
+                            markProtectionActive()
                         }
                         is DohResult.Failure, null -> {
                             probeAttempts++
+                            val remaining = startupBudget?.remainingMillis() ?: 0L
+                            val backupReady = fallback?.enabled == true && backupTransport != null
+                            if (backupReady && !startupTriedBackup &&
+                                DnsFallbackPolicy.shouldAttemptBackupAtStartup(
+                                    probeAttempts,
+                                    PROBE_ATTEMPTS,
+                                    remaining
+                                )
+                            ) {
+                                startupTriedBackup = true
+                                logStartupDebug(
+                                    "dnsVerify primaryExhausted attempts=$probeAttempts remainingMs=$remaining action=tryBackup"
+                                )
+                                // Keep [verificationInFlight] held so the startup backup attempt
+                                // cannot overlap with another primary retry.
+                                verifyBackupAtStartup()
+                                return@post
+                            }
+                            verificationInFlight.set(false)
                             val budgetExhausted = startupBudget?.isExhausted() == true
                             val giveUp = StartupVerificationPolicy.mustStopRetrying(
                                 probeAttempts,
@@ -928,6 +1082,9 @@ class KuiesVpnService : VpnService() {
                                 logStartupDebug(
                                     "dnsVerify givingUp attempts=$probeAttempts budgetExhausted=$budgetExhausted"
                                 )
+                                if (fallback?.enabled == true) {
+                                    announceFallback(DnsFallbackStatus.UNAVAILABLE)
+                                }
                                 requestFailOpen(error)
                             } else {
                                 val delay = StartupVerificationPolicy.nextRetryDelayMillis(
@@ -935,6 +1092,9 @@ class KuiesVpnService : VpnService() {
                                     startupBudget?.remainingMillis() ?: PROBE_RETRY_DELAY_MILLIS
                                 )
                                 if (delay <= 0L) {
+                                    if (fallback?.enabled == true) {
+                                        announceFallback(DnsFallbackStatus.UNAVAILABLE)
+                                    }
                                     requestFailOpen(ProtectionError.DNS_TIMEOUT)
                                 } else {
                                     mainHandler.postDelayed({ verifyDnsRoundTrip() }, delay)
@@ -947,6 +1107,74 @@ class KuiesVpnService : VpnService() {
         } catch (rejected: RejectedExecutionException) {
             verificationInFlight.set(false)
         }
+    }
+
+    /**
+     * The primary could not be verified within its share of the startup budget. A real DoH round
+     * trip against the backup is required before the tunnel is called active, so a failed backup
+     * still ends in the existing fail-open path instead of a hopeful claim.
+     */
+    private fun verifyBackupAtStartup() {
+        val executor = workers
+        val generation = tunnelGeneration
+        if (executor == null) {
+            verificationInFlight.set(false)
+            requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
+            return
+        }
+        try {
+            executor.execute {
+                val result = backupTransport?.exchange(probeQuery())
+                mainHandler.post {
+                    verificationInFlight.set(false)
+                    if (generation != tunnelGeneration || !running || failingOpen) return@post
+                    logStartupDebug("dnsVerifyBackup result=${describeOutcome(result)}")
+                    when (result) {
+                        is DohResult.Success -> {
+                            val decision = fallback?.activateBackupAfterStartup(
+                                SystemClock.elapsedRealtime()
+                            )
+                            if (decision != DnsFallbackDecision.SWITCHED_TO_BACKUP) {
+                                // The switch was turned off during the start; the primary was never
+                                // verified, so only the existing fail-open path remains.
+                                announceFallback(DnsFallbackStatus.DISABLED)
+                                requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+                                return@post
+                            }
+                            announceFallback(DnsFallbackStatus.BACKUP)
+                            markProtectionActive()
+                            scheduleRecoveryProbe()
+                        }
+                        is DohResult.Failure, null -> {
+                            val error = (result as? DohResult.Failure)?.failure?.toProtectionError()
+                                ?: ProtectionError.DNS_UNREACHABLE
+                            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+                            requestFailOpen(error)
+                        }
+                    }
+                }
+            }
+        } catch (rejected: RejectedExecutionException) {
+            verificationInFlight.set(false)
+            requestFailOpen(ProtectionError.TUN_ESTABLISH_FAILED)
+        }
+    }
+
+    /** The verified tunnel is now allowed to call itself 「防護已啟用」. */
+    private fun markProtectionActive() {
+        startupTimeline?.mark("dnsVerified")
+        mainHandler.removeCallbacks(startupWatchdog)
+        ProtectionStatusHolder.update(
+            ProtectionStateRules.afterDnsVerified(),
+            null,
+            activeDnsPath
+        )
+        notifications.updateOngoing(
+            getString(R.string.notification_active_title),
+            getString(R.string.notification_active_text)
+        )
+        Log.i(TAG, "DNS round trip verified; protection is active (dnsPath=${activeDnsPath.name}).")
+        logStartupSummary()
     }
 
     /** The failure kind only — never the endpoint, an address, or any query content. */
@@ -963,12 +1191,206 @@ class KuiesVpnService : VpnService() {
         ednsUdpPayloadSize = PROBE_EDNS_PAYLOAD
     )
 
+    // --- backup switching and recovery -------------------------------------------------------
+
+    /** Publishes a transition from whichever thread made it, always on the main thread. */
+    private fun announceFallback(status: DnsFallbackStatus) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            ProtectionStatusHolder.updateDnsFallback(status)
+        } else {
+            mainHandler.post { ProtectionStatusHolder.updateDnsFallback(status) }
+        }
+    }
+
+    /**
+     * Proves the backup with one real DoH round trip before moving any query to it.
+     *
+     * The user's triggering query was already answered with SERVFAIL, so this probe serves the next
+     * queries rather than holding one request open for two upstream timeouts.
+     */
+    private fun probeBackupAndSwitch() {
+        if (!backupProbeInFlight.compareAndSet(false, true)) return
+        val generation = tunnelGeneration
+        val executor = workers
+        val probe = backupTransport
+        if (executor == null || probe == null) {
+            backupProbeInFlight.set(false)
+            fallback?.onBackupProbeFailure()
+            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+            return
+        }
+        try {
+            executor.execute {
+                val result = probe.exchange(probeQuery())
+                mainHandler.post {
+                    backupProbeInFlight.set(false)
+                    if (generation != tunnelGeneration || !running || failingOpen) return@post
+                    val machine = fallback ?: return@post
+                    if (result is DohResult.Success) {
+                        val decision = machine.onBackupProbeSuccess(SystemClock.elapsedRealtime())
+                        if (decision == DnsFallbackDecision.SWITCHED_TO_BACKUP) {
+                            Log.i(TAG, "Backup DoH verified; upstream switched without a tunnel rebuild.")
+                            announceFallback(DnsFallbackStatus.BACKUP)
+                            scheduleRecoveryProbe()
+                        }
+                    } else {
+                        machine.onBackupProbeFailure()
+                        announceFallback(DnsFallbackStatus.UNAVAILABLE)
+                        val error = (result as? DohResult.Failure)?.failure?.toProtectionError()
+                            ?: ProtectionError.DNS_UNREACHABLE
+                        requestFailOpen(error)
+                    }
+                }
+            }
+        } catch (rejected: RejectedExecutionException) {
+            backupProbeInFlight.set(false)
+            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+        }
+    }
+
+    /** Schedules the next low-frequency primary probe; the machine decides the interval. */
+    private fun scheduleRecoveryProbe() {
+        val machine = fallback ?: return
+        if (!running || !machine.enabled || machine.activeRole != DnsUpstreamRole.BACKUP) return
+        val delay = machine.nextPrimaryProbeDelayMillis(SystemClock.elapsedRealtime()) ?: return
+        mainHandler.removeCallbacks(recoveryProbeRunner)
+        mainHandler.postDelayed(recoveryProbeRunner, delay)
+    }
+
+    /**
+     * While the backup is serving queries, check the primary rarely and with backoff. Only a valid
+     * DoH round trip switches back, and the switch touches no tunnel state, statistics or settings.
+     */
+    private fun probePrimaryForRecovery() {
+        if (!running || failingOpen) return
+        val machine = fallback ?: return
+        if (!machine.enabled || machine.activeRole != DnsUpstreamRole.BACKUP) return
+        if (!recoveryProbeInFlight.compareAndSet(false, true)) {
+            scheduleRecoveryProbe()
+            return
+        }
+        val generation = tunnelGeneration
+        val executor = workers
+        val probe = transport
+        if (executor == null || probe == null) {
+            recoveryProbeInFlight.set(false)
+            return
+        }
+        try {
+            executor.execute {
+                val result = probe.exchange(probeQuery())
+                mainHandler.post {
+                    recoveryProbeInFlight.set(false)
+                    if (generation != tunnelGeneration || !running || failingOpen) return@post
+                    val current = fallback ?: return@post
+                    if (result is DohResult.Success) {
+                        if (current.onPrimaryProbeSuccess() ==
+                            DnsFallbackDecision.SWITCHED_TO_PRIMARY
+                        ) {
+                            Log.i(TAG, "Primary DoH recovered; upstream switched back without a tunnel rebuild.")
+                            announceFallback(DnsFallbackStatus.PRIMARY)
+                        }
+                    } else {
+                        current.onPrimaryProbeFailure(SystemClock.elapsedRealtime())
+                        scheduleRecoveryProbe()
+                    }
+                }
+            }
+        } catch (rejected: RejectedExecutionException) {
+            recoveryProbeInFlight.set(false)
+            scheduleRecoveryProbe()
+        }
+    }
+
+    /** The user moved the backup switch; read the stored value and move the upstream safely. */
+    private fun applyDnsFallbackSetting() {
+        if (!running || failingOpen) return
+        val machine = fallback ?: return
+        val enabled = AppSettingsStore(this).load().dnsAutoFallbackEnabled
+        if (enabled && backupTransport == null) {
+            // The tunnel may have started with the feature off, so no backup client exists yet.
+            // Building one opens no socket; it is only used after the primary actually fails.
+            backupTransport = createBackupTransport(currentBootstrapDnsServers())
+        }
+        when (machine.setEnabled(enabled, SystemClock.elapsedRealtime())) {
+            DnsFallbackDecision.DISABLED -> {
+                Log.i(TAG, "Automatic DNS backup disabled; the primary is the only upstream.")
+                mainHandler.removeCallbacks(recoveryProbeRunner)
+                closeBackupTransport()
+                announceFallback(DnsFallbackStatus.DISABLED)
+            }
+            DnsFallbackDecision.VERIFY_PRIMARY_FOR_DISABLE -> {
+                Log.i(TAG, "Backup disabled while in use; verifying the primary before returning.")
+                mainHandler.removeCallbacks(recoveryProbeRunner)
+                announceFallback(DnsFallbackStatus.SWITCHING)
+                verifyPrimaryForDisable()
+            }
+            DnsFallbackDecision.ENABLED -> {
+                Log.i(TAG, "Automatic DNS backup enabled.")
+                announceFallback(machine.status)
+                if (machine.activeRole == DnsUpstreamRole.BACKUP) scheduleRecoveryProbe()
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * Turning the backup off while it is carrying traffic must not keep using it in secret. A real
+     * primary round trip is required; if it fails, protection fails open rather than staying on the
+     * backup the user just switched off.
+     */
+    private fun verifyPrimaryForDisable() {
+        if (!disableVerifyInFlight.compareAndSet(false, true)) return
+        val generation = tunnelGeneration
+        val executor = workers
+        val probe = transport
+        if (executor == null || probe == null) {
+            disableVerifyInFlight.set(false)
+            fallback?.onDisableVerificationFailure()
+            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+            return
+        }
+        try {
+            executor.execute {
+                val result = probe.exchange(probeQuery())
+                mainHandler.post {
+                    disableVerifyInFlight.set(false)
+                    if (generation != tunnelGeneration || !running || failingOpen) return@post
+                    val current = fallback ?: return@post
+                    if (result is DohResult.Success) {
+                        if (current.onDisableVerificationSuccess() == DnsFallbackDecision.DISABLED) {
+                            Log.i(TAG, "Primary verified; upstream returned to it and the backup is off.")
+                            closeBackupTransport()
+                            announceFallback(DnsFallbackStatus.DISABLED)
+                        }
+                    } else {
+                        if (current.onDisableVerificationFailure() == DnsFallbackDecision.FAIL_OPEN) {
+                            Log.w(TAG, "Primary unavailable while disabling the backup; failing open.")
+                            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+                            val error = (result as? DohResult.Failure)?.failure?.toProtectionError()
+                                ?: ProtectionError.DNS_UNREACHABLE
+                            requestFailOpen(error)
+                        }
+                    }
+                }
+            }
+        } catch (rejected: RejectedExecutionException) {
+            disableVerifyInFlight.set(false)
+            announceFallback(DnsFallbackStatus.UNAVAILABLE)
+            requestFailOpen(ProtectionError.DNS_UNREACHABLE)
+        }
+    }
+
     /**
      * Fail-open: stop intercepting so the system resolver takes over again, and tell the user the
      * protection stopped. Never leave the user with a broken DNS path.
      */
     private fun requestFailOpen(error: ProtectionError) {
-        if (!running) return
+        if (!running || failingOpen) return
+        failingOpen = true
         Log.w(TAG, "Failing open: $error")
         stopState = ProtectionStateRules.afterFailure()
         stopError = error
@@ -1049,6 +1471,13 @@ class KuiesVpnService : VpnService() {
         if (transportToClose != null) {
             Thread({ runCatching { transportToClose.close() } }, "kuies-doh-teardown").start()
         }
+        val backupToClose = backupTransport
+        backupTransport = null
+        if (backupToClose != null) {
+            Thread({ runCatching { backupToClose.close() } }, "kuies-backup-teardown").start()
+        }
+        fallback = null
+        startupTriedBackup = false
 
         workers?.shutdownNow()
         workers = null
@@ -1071,7 +1500,9 @@ class KuiesVpnService : VpnService() {
         startupBudget = null
         startupTimeline = null
         verificationInFlight.set(false)
-        consecutiveFailures.set(0)
+        backupProbeInFlight.set(false)
+        recoveryProbeInFlight.set(false)
+        disableVerifyInFlight.set(false)
         DnsStatsRepository.persistNow()
     }
 
@@ -1172,12 +1603,18 @@ class KuiesVpnService : VpnService() {
         const val ACTION_START = "tw.kuies.block.action.VPN_START"
         const val ACTION_STOP = "tw.kuies.block.action.VPN_STOP"
         const val ACTION_REBUILD = "tw.kuies.block.action.VPN_REBUILD"
+        const val ACTION_DNS_FALLBACK_CHANGED = "tw.kuies.block.action.DNS_FALLBACK_CHANGED"
         private const val EXCLUSION_REBUILD_DEBOUNCE_MILLIS = 250L
+        private const val DNS_FALLBACK_CHANGE_DEBOUNCE_MILLIS = 250L
         private const val DEFAULT_MTU = 1500
-        private const val FAILURE_THRESHOLD = 5
         private const val PROBE_ATTEMPTS = 3
         private const val PROBE_EDNS_PAYLOAD = 4096
         private const val PROBE_RETRY_DELAY_MILLIS = 1_500L
+
+        /** Shorter than the primary's: the backup is tried only after the primary already failed. */
+        private const val BACKUP_CALL_TIMEOUT_MILLIS = 5_000L
+        private const val BACKUP_CONNECT_TIMEOUT_MILLIS = 3_000L
+        private const val BACKUP_READ_TIMEOUT_MILLIS = 4_000L
 
         /**
          * Hard ceiling for one start, from STARTING to a decision. Bounds the wait regardless of
@@ -1239,6 +1676,26 @@ class KuiesVpnService : VpnService() {
                 ContextCompat.startForegroundService(context, intent)
             } catch (exception: Exception) {
                 Log.w(TAG, "Could not send ACTION_REBUILD via startForegroundService: ${exception.message}")
+            }
+        }
+
+        /**
+         * Tells a running tunnel that the stored backup switch changed.
+         *
+         * A no-op when protection is not running: moving the switch must never start the VPN. The
+         * service re-reads the stored value, so this carries no state of its own.
+         */
+        fun notifyDnsFallbackSettingChanged(context: Context) {
+            val intent = Intent(context, KuiesVpnService::class.java)
+                .setAction(ACTION_DNS_FALLBACK_CHANGED)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (exception: Exception) {
+                Log.w(
+                    TAG,
+                    "Could not send ACTION_DNS_FALLBACK_CHANGED via startForegroundService: " +
+                        exception.message
+                )
             }
         }
     }

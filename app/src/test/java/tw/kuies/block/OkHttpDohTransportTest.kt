@@ -100,6 +100,24 @@ class OkHttpDohTransportTest {
     }
 
     @Test
+    fun treatsAValidNxdomainAnswerAsSuccess() {
+        val server = startServer()
+        val question = query(0x0103)
+        val body = DnsMessageWriter.responseHeaderOnly(
+            question,
+            question.size,
+            DnsRcode.NXDOMAIN,
+            truncated = false
+        )
+        server.enqueue(dnsMessageResponse(body))
+
+        val result = transportFor(server).exchange(question)
+
+        // A protocol-valid negative answer proves the upstream works; it is not an outage.
+        assertTrue(result is DohResult.Success)
+    }
+
+    @Test
     fun rejectsANonOkStatus() {
         val server = startServer()
         server.enqueue(

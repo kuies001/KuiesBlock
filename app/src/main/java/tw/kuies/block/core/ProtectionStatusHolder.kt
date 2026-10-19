@@ -3,6 +3,7 @@ package tw.kuies.block.core
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import tw.kuies.block.dns.DnsFallbackStatus
 
 /**
  * Process-wide, observable protection status shared by the VPN service and the Compose UI.
@@ -25,6 +26,19 @@ object ProtectionStatusHolder {
      */
     var dnsPath: DnsPath by mutableStateOf(DnsPath.INTERCEPTED)
         private set
+
+    /**
+     * Which encrypted upstream the service is really using, as last verified by the service.
+     *
+     * The holder only publishes; the UI must still check [ProtectionState], because a stopped or
+     * starting tunnel can never be described as 「主要 DNS 正常」.
+     */
+    var dnsFallbackStatus: DnsFallbackStatus by mutableStateOf(DnsFallbackStatus.PRIMARY)
+        private set
+
+    fun updateDnsFallback(status: DnsFallbackStatus) {
+        dnsFallbackStatus = status
+    }
 
     fun update(
         newState: ProtectionState,
