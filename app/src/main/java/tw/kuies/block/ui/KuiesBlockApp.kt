@@ -78,9 +78,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class BlockDestination { HOME, SETTINGS, APP_PROTECTION }
+
+/** How long 過濾規則已更新 stays on screen after the coordinator really finished. */
+private const val FILTER_SUCCESS_NOTICE_MILLIS = 2_000L
 
 @Composable
 fun KuiesBlockApp(
@@ -147,8 +151,21 @@ fun KuiesBlockApp(
 
     // 立即更新 is the only caller of filterUpdating, and a mode change can supersede its request. The
     // coordinator then reports no second result, so the idle phase is what re-enables the button.
+    //
+    // The success line is shown only after the coordinator really settled the newest request, then
+    // hidden on a timer local to the screen — no download is faked, only its confirmation fades.
     LaunchedEffect(filterSyncPhase) {
-        if (filterSyncPhase == FilterSyncPhase.IDLE) filterUpdating = false
+        when (filterSyncPhase) {
+            FilterSyncPhase.SUCCEEDED -> {
+                filterUpdating = false
+                delay(FILTER_SUCCESS_NOTICE_MILLIS)
+                if (filterSyncPhase == FilterSyncPhase.SUCCEEDED) {
+                    filterSyncPhase = FilterSyncPhase.IDLE
+                }
+            }
+            FilterSyncPhase.IDLE -> filterUpdating = false
+            FilterSyncPhase.PREPARING, FilterSyncPhase.UPDATING -> Unit
+        }
     }
 
     // Per-app exclusions are a VPN-scope setting, kept separate from FilterSettings. The list is

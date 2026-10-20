@@ -9,12 +9,15 @@ import java.util.concurrent.TimeUnit
  *
  * [PREPARING] means the newly chosen mode has no rules published yet and a list has to arrive before
  * it can take effect. [UPDATING] means rules are already in effect and the background check is only
- * refreshing them, so the screen must not imply that protection stopped.
+ * refreshing them, so the screen must not imply that protection stopped. Both are shown as an
+ * in-progress state; [SUCCEEDED] is the short-lived confirmation of the last request that finished
+ * successfully, and is never emitted by a request that was superseded.
  */
 enum class FilterSyncPhase {
     IDLE,
     PREPARING,
-    UPDATING
+    UPDATING,
+    SUCCEEDED
 }
 
 /**

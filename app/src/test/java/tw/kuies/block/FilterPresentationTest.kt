@@ -3,6 +3,7 @@ package tw.kuies.block
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kuies.block.core.ProtectionError
@@ -184,7 +185,7 @@ class FilterPresentationTest {
         )
 
         assertEquals(
-            "更新失敗，使用現有規則。",
+            "更新失敗，使用現有規則",
             FilterPresentation.syncHint(status, FilterSyncPhase.IDLE)
         )
         assertTrue(FilterPresentation.syncHintIsError(status, FilterSyncPhase.IDLE))
@@ -196,9 +197,43 @@ class FilterPresentationTest {
     }
 
     @Test
+    fun aFailedUpdateWithNoRulesSaysTheRulesAreNotReady() {
+        val settings = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
+            FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
+                state = SubscriptionState.FAILED,
+                ruleCount = 0,
+                lastError = "network error"
+            )
+        )
+        val status = FilterStatus.of(settings, FilterSnapshot.EMPTY)
+
+        assertEquals(
+            "規則尚未就緒",
+            FilterPresentation.syncHint(status, FilterSyncPhase.IDLE)
+        )
+        assertTrue(FilterPresentation.syncHintIsError(status, FilterSyncPhase.IDLE))
+    }
+
+    @Test
+    fun aSuccessfulUpdateShowsAConfirmationThatCanFade() {
+        val status = readyStatus(rules = 5)
+
+        assertEquals(
+            "過濾規則已更新",
+            FilterPresentation.syncHint(status, FilterSyncPhase.SUCCEEDED)
+        )
+        assertNull(
+            "the confirmation must disappear once the screen clears it",
+            FilterPresentation.syncHint(status, FilterSyncPhase.IDLE)
+        )
+        assertFalse(FilterPresentation.syncHintIsProgress(FilterSyncPhase.SUCCEEDED))
+        assertFalse(FilterPresentation.syncHintIsError(status, FilterSyncPhase.SUCCEEDED))
+    }
+
+    @Test
     fun aDownloadInProgressIsSaidBeforeAnythingElse() {
         assertEquals(
-            "正在準備過濾規則…",
+            "正在更新過濾規則…",
             FilterPresentation.syncHint(
                 FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY),
                 FilterSyncPhase.PREPARING
@@ -208,6 +243,8 @@ class FilterPresentationTest {
             "正在更新過濾規則…",
             FilterPresentation.syncHint(readyStatus(rules = 5), FilterSyncPhase.UPDATING)
         )
+        assertTrue(FilterPresentation.syncHintIsProgress(FilterSyncPhase.PREPARING))
+        assertTrue(FilterPresentation.syncHintIsProgress(FilterSyncPhase.UPDATING))
     }
 
     @Test

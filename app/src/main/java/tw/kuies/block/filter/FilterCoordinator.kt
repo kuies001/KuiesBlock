@@ -139,11 +139,6 @@ class FilterCoordinator(
                 val chosen = base.withMode(mode)
                 if (chosen != base) runCatching { store.save(chosen) }
 
-                // Publish before touching the network: a source whose content is already stored takes
-                // effect now, and a mode with nothing downloaded reports exactly that.
-                val status = publish(chosen)
-                onStatus(status)
-
                 val kind = if (chosen.mode == FilterMode.CUSTOM) {
                     SyncKind.SELECTED_MISSING
                 } else {
@@ -154,13 +149,19 @@ class FilterCoordinator(
                 // arrived. A real switch always checks its list.
                 val retries = chosen == base && when (kind) {
                     SyncKind.SELECTED_MISSING -> targetsFor(chosen, kind).isNotEmpty()
-                    else -> !status.hasUsableRules
+                    else -> !hasPublishableRules(chosen)
                 }
-                if (chosen != base || retries) {
-                    // Only a request that really starts work takes a sequence number: a no-op tap must
-                    // not cancel an update that is already running.
-                    val request = syncRequests.incrementAndGet()
-                    startSync(request, chosen, kind, status, onStatus)
+                // The progress line is claimed *before* the snapshot is rebuilt. Assembling a large
+                // list can take a moment, and the user must see the tap was accepted immediately.
+                val request = startRequestIfNeeded(chosen, kind, chosen != base || retries)
+
+                // Publish before touching the network: a source whose content is already stored takes
+                // effect now, and a mode with nothing downloaded reports exactly that.
+                val status = publish(chosen)
+                onStatus(status)
+
+                if (request != null) {
+                    enqueueSync(request, chosen.syncKey(), kind, onStatus)
                 }
             } finally {
                 onFinished()
@@ -195,15 +196,20 @@ class FilterCoordinator(
                 val base = runCatching { store.load() }.getOrNull() ?: return@execute
                 val chosen = base.withSourceSelected(source, selected)
                 if (chosen != base) runCatching { store.save(chosen) }
+
+                // Claim the progress line before the snapshot rebuild, so a tick is acknowledged at
+                // once even when the current selection has a large list to assemble.
+                val request = startRequestIfNeeded(
+                    chosen,
+                    SyncKind.SELECTED_MISSING,
+                    chosen != base
+                )
+
                 val status = publish(chosen)
                 onStatus(status)
 
-                if (chosen != base) {
-                    // A real change claims the newest sequence number, so the previous debounced pass
-                    // is superseded rather than downloading a selection the user has already left. A
-                    // refused change (the last source) claims nothing and cancels nothing.
-                    val request = syncRequests.incrementAndGet()
-                    scheduleDebouncedSync(request, chosen, status, onStatus)
+                if (request != null) {
+                    scheduleDebouncedSync(request, chosen.syncKey(), onStatus)
                 }
             } finally {
                 onFinished()
@@ -221,14 +227,8 @@ class FilterCoordinator(
         dispatcher.execute {
             val settings = runCatching { store.load() }.getOrNull() ?: return@execute
             val request = syncRequests.incrementAndGet()
-            startPhase(request)
-            try {
-                downloadDispatcher.execute {
-                    runSync(request, settings.syncKey(), SyncKind.ALL_ACTIVE, onResult)
-                }
-            } catch (_: RejectedExecutionException) {
-                endPhase(request)
-            }
+            startPhase(request, hasPublishableRules(settings))
+            enqueueSync(request, settings.syncKey(), SyncKind.ALL_ACTIVE, onResult)
         }
     }
 
@@ -277,7 +277,7 @@ class FilterCoordinator(
             return
         }
 
-        startPhase(SWEEP_OWNER)
+        startPhase(SWEEP_OWNER, hasPublishableRules(settings))
         val results = ArrayList<SubscriptionUpdateResult>(targets.size)
         var updated = 0
         var unchanged = 0
@@ -441,14 +441,8 @@ class FilterCoordinator(
             val live = settings.subscriptions.firstOrNull { it.id == subscription.id }
                 ?: return@execute
             val request = syncRequests.incrementAndGet()
-            startPhase(request)
-            try {
-                downloadDispatcher.execute {
-                    runSync(request, settings.syncKey(), SyncKind.ONE(live.id), onResult)
-                }
-            } catch (_: RejectedExecutionException) {
-                endPhase(request)
-            }
+            startPhase(request, hasPublishableRules(settings))
+            enqueueSync(request, settings.syncKey(), SyncKind.ONE(live.id), onResult)
         }
     }
 
@@ -488,21 +482,30 @@ class FilterCoordinator(
         }
 
     /**
-     * Starts a sync at once, unless there is nothing to do.
+     * Claims the progress line when [kind] has real work, and returns its request number.
      *
-     * The phase is reported before the job is queued so the screen says 準備中 immediately rather
-     * than after the first network read.
+     * The phase is emitted here, before the snapshot is rebuilt, so the screen answers a tap at once
+     * instead of after a large list has been assembled. A request is only taken when there is a
+     * target to download, so a no-op tap can never cancel an update that is already running.
      */
-    private fun startSync(
-        request: Long,
+    private fun startRequestIfNeeded(
         settings: FilterSettings,
         kind: SyncKind,
-        status: FilterStatus,
+        allowed: Boolean
+    ): Long? {
+        if (!allowed || targetsFor(settings, kind).isEmpty()) return null
+        val request = syncRequests.incrementAndGet()
+        startPhase(request, hasPublishableRules(settings))
+        return request
+    }
+
+    /** Hands one pass to the download thread. */
+    private fun enqueueSync(
+        request: Long,
+        key: FilterSyncKey,
+        kind: SyncKind,
         onStatus: (FilterStatus) -> Unit
     ) {
-        if (targetsFor(settings, kind).isEmpty()) return
-        startPhase(request, status)
-        val key = settings.syncKey()
         try {
             downloadDispatcher.execute { runSync(request, key, kind, onStatus) }
         } catch (_: RejectedExecutionException) {
@@ -513,20 +516,12 @@ class FilterCoordinator(
     /** Merges changes made in quick succession into one download pass for the final selection. */
     private fun scheduleDebouncedSync(
         request: Long,
-        settings: FilterSettings,
-        status: FilterStatus,
+        key: FilterSyncKey,
         onStatus: (FilterStatus) -> Unit
     ) {
-        if (targetsFor(settings, SyncKind.SELECTED_MISSING).isEmpty()) return
-        startPhase(request, status)
-        val key = settings.syncKey()
         debouncer.post(
             Runnable {
-                try {
-                    downloadDispatcher.execute { runSync(request, key, SyncKind.SELECTED_MISSING, onStatus) }
-                } catch (_: RejectedExecutionException) {
-                    endPhase(request)
-                }
+                enqueueSync(request, key, SyncKind.SELECTED_MISSING, onStatus)
             }
         )
     }
@@ -592,7 +587,16 @@ class FilterCoordinator(
             } else if (current) {
                 lastStatus?.let(onStatus)
             }
-            endPhase(request)
+            if (current && applied != null && succeeded(results)) {
+                // Confirmation belongs to the newest request only, and only after the status that
+                // carries its rules has been handed to the screen.
+                if (phaseOwner == request) {
+                    phaseOwner = null
+                    notifySync(FilterSyncPhase.SUCCEEDED)
+                }
+            } else {
+                endPhase(request)
+            }
         }
         try {
             dispatcher.execute(task)
@@ -653,17 +657,20 @@ class FilterCoordinator(
         return status
     }
 
-    private fun phaseFor(status: FilterStatus?): FilterSyncPhase =
-        if ((status?.effectiveRuleCount ?: 0) > 0) {
-            FilterSyncPhase.UPDATING
-        } else {
-            FilterSyncPhase.PREPARING
-        }
+    /** True when every target of this pass arrived or was confirmed current. */
+    private fun succeeded(results: List<SubscriptionUpdateResult>?): Boolean =
+        results != null &&
+            results.isNotEmpty() &&
+            results.none { it is SubscriptionUpdateResult.Failed }
+
+    /** Whether [settings] can publish any rule without a download; used only to word the progress. */
+    private fun hasPublishableRules(settings: FilterSettings): Boolean =
+        settings.effectiveSubscriptions.any { settings.contributesToSnapshot(it) }
 
     /** Claims the progress line for [request] and says what it is doing. */
-    private fun startPhase(request: Long, status: FilterStatus? = lastStatus) {
+    private fun startPhase(request: Long, hasRules: Boolean) {
         phaseOwner = request
-        notifySync(phaseFor(status))
+        notifySync(if (hasRules) FilterSyncPhase.UPDATING else FilterSyncPhase.PREPARING)
     }
 
     /**

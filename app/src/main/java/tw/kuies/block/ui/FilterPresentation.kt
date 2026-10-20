@@ -137,29 +137,32 @@ object FilterPresentation {
      *
      * Kept beside [stateLabel] rather than inside it: the state line describes the rules that are
      * really published, while this line describes the work still running. That is what lets 規則已生效
-     * and 正在下載最新版 be shown at the same time instead of one hiding the other.
+     * and 正在更新過濾規則 be shown at the same time instead of one hiding the other.
      *
      * A failure with rules still published stays visible — it is the honest description of the list
      * the user is relying on, not a temporary progress message.
      */
-    fun syncHint(status: FilterStatus, phase: FilterSyncPhase): String? = when {
-        phase != FilterSyncPhase.IDLE ->
-            if (status.effectiveRuleCount > 0) "正在更新過濾規則…" else "正在準備過濾規則…"
-        hasFailedActiveSource(status) && status.effectiveRuleCount > 0 ->
-            "更新失敗，使用現有規則。"
-        else -> null
+    fun syncHint(status: FilterStatus?, phase: FilterSyncPhase): String? = when (phase) {
+        FilterSyncPhase.PREPARING, FilterSyncPhase.UPDATING -> "正在更新過濾規則…"
+        FilterSyncPhase.SUCCEEDED -> "過濾規則已更新"
+        FilterSyncPhase.IDLE -> when {
+            status == null -> null
+            activeFailure(status) && status.effectiveRuleCount > 0 -> "更新失敗，使用現有規則"
+            activeFailure(status) && status.effectiveRuleCount == 0 -> "規則尚未就緒"
+            else -> null
+        }
     }
 
-    /** True when [syncHint] is reporting a failure rather than progress. */
-    fun syncHintIsError(status: FilterStatus, phase: FilterSyncPhase): Boolean =
-        phase == FilterSyncPhase.IDLE &&
-            hasFailedActiveSource(status) &&
-            status.effectiveRuleCount > 0
+    /** True when [syncHint] is reporting a failure rather than progress or success. */
+    fun syncHintIsError(status: FilterStatus?, phase: FilterSyncPhase): Boolean =
+        phase == FilterSyncPhase.IDLE && status != null && activeFailure(status)
 
-    private fun hasFailedActiveSource(status: FilterStatus): Boolean =
-        status.sourceStatuses.any {
-            it.enabled && it.state == SubscriptionState.FAILED && it.ruleCount > 0
-        }
+    /** True when [syncHint] is a running task, which gets the indeterminate indicator. */
+    fun syncHintIsProgress(phase: FilterSyncPhase): Boolean =
+        phase == FilterSyncPhase.PREPARING || phase == FilterSyncPhase.UPDATING
+
+    private fun activeFailure(status: FilterStatus): Boolean =
+        status.sourceStatuses.any { it.enabled && it.state == SubscriptionState.FAILED }
 
     /**
      * The last *automatic* check, which is a different question from the last successful update above.

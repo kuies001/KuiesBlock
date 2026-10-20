@@ -89,6 +89,26 @@ class SettingsScreenSurfaceTest {
         )
     }
 
+    /**
+     * Selecting a preset collapses the strength card immediately. The progress line therefore has to
+     * live in the card's header area, not inside its expandable body — that placement was the reason
+     * the real-device screen showed nothing until the download had finished.
+     */
+    @Test
+    fun theFilterProgressNoticeIsOutsideTheExpandableBody() {
+        val source = settingsScreenSource()
+        val section = source.substringAfter("private fun InterceptionStrengthSection")
+            .substringBefore("The short line under the strength header")
+
+        assertTrue(source.contains("status = { FilterSyncNotice(status, phase) }"))
+        assertTrue(source.contains("status?.invoke()"))
+        assertTrue(source.contains("CircularProgressIndicator"))
+        assertFalse(
+            "the hint must not be drawn only when the card is expanded",
+            section.contains("FilterPresentation.syncHint")
+        )
+    }
+
     private fun autoUpdateControlsSource(): String = settingsScreenSource()
         .substringAfter("private fun AutoUpdateControls")
         .substringBefore("private fun autoUpdateIntervalLabel")

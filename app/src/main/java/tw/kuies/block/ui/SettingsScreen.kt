@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -17,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -357,7 +359,11 @@ private fun InterceptionStrengthSection(
         value = status?.let { FilterPresentation.modeSummaryLabel(it.mode) }
             ?: stringResource(R.string.filter_state_label_loading),
         expanded = expanded,
-        onToggle = { expanded = !expanded }
+        onToggle = { expanded = !expanded },
+        // The progress line belongs to the header area, not to the expandable body: selecting a
+        // fixed tier collapses the card immediately, and the user still has to see that the tap
+        // started an update.
+        status = { FilterSyncNotice(status, phase) }
     ) {
         Text(
             text = stringResource(R.string.settings_filter_body),
@@ -391,18 +397,40 @@ private fun InterceptionStrengthSection(
                 FilterPresentation.stateLabel(it, privateDnsMode, protectionState, isServiceRunning)
             } ?: stringResource(R.string.filter_state_label_loading)
         )
-        val syncHint = status?.let { FilterPresentation.syncHint(it, phase) }
-        if (status != null && syncHint != null) {
-            Text(
-                text = syncHint,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (FilterPresentation.syncHintIsError(status, phase)) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
+    }
+}
+
+/**
+ * The short line under the strength header.
+ *
+ * It is drawn outside the expandable body on purpose: a preset selection collapses the card at once,
+ * and a hint that only existed inside the body would never be seen. A running task gets a small
+ * indeterminate indicator — not a percentage, which the app cannot know.
+ */
+@Composable
+private fun FilterSyncNotice(status: FilterStatus?, phase: FilterSyncPhase) {
+    val hint = FilterPresentation.syncHint(status, phase) ?: return
+    val isError = FilterPresentation.syncHintIsError(status, phase)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (FilterPresentation.syncHintIsProgress(phase)) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary
             )
         }
+        Text(
+            text = hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isError) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
     }
 }
 
@@ -775,6 +803,8 @@ private fun ExpandableSectionCard(
     value: String,
     expanded: Boolean,
     onToggle: () -> Unit,
+    /** Shown under the header whether the card is open or closed; the progress line lives here. */
+    status: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -794,6 +824,7 @@ private fun ExpandableSectionCard(
                 expanded = expanded,
                 onToggle = onToggle
             )
+            status?.invoke()
             if (expanded) content()
         }
     }

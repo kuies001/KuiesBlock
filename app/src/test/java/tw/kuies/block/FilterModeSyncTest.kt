@@ -21,6 +21,7 @@ import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterSyncPhase
 import tw.kuies.block.filter.SubscriptionContentStore
 import tw.kuies.block.filter.SubscriptionFailure
 import tw.kuies.block.filter.SubscriptionFetchRequest
@@ -300,6 +301,66 @@ class FilterModeSyncTest {
         assertFalse(code.contains("WorkManager"))
         assertFalse(code.contains("PeriodicUpdateScheduler"))
         assertFalse(code.contains("FilterUpdateWorker"))
+    }
+
+    /**
+     * The screen must be told about the tap before the snapshot is rebuilt. Assembling a large list
+     * is the slow step, and a hint published after it is the 7–8 second delay seen on the device.
+     */
+    @Test
+    fun theProgressPhaseIsReportedBeforeTheSnapshotIsRebuilt() {
+        storeReadyStandardInCustomMode()
+        val events = mutableListOf<String>()
+        val coordinator = coordinator()
+        coordinator.addSyncListener { events += "phase:$it" }
+        coordinator.selectMode(FilterMode.STANDARD, onStatus = { events += "status:${it.effectiveRuleCount}" })
+
+        assertEquals("phase:UPDATING", events.first())
+        assertTrue(
+            "the phase must precede the first status that follows the tap",
+            events.indexOfFirst { it.startsWith("phase:") } <
+                events.indexOfFirst { it.startsWith("status:") }
+        )
+    }
+
+    @Test
+    fun aSuccessfulUpdateEndsWithAConfirmation() {
+        source.body = "||ads.example^\n"
+        val phases = mutableListOf<FilterSyncPhase>()
+        val coordinator = coordinator()
+        coordinator.addSyncListener { phases += it }
+
+        coordinator.selectMode(FilterMode.STRICT)
+
+        assertEquals(FilterSyncPhase.SUCCEEDED, phases.last())
+        assertEquals(1, phases.count { it == FilterSyncPhase.SUCCEEDED })
+    }
+
+    @Test
+    fun aFailedUpdateDoesNotClaimSuccess() {
+        source.failure = SubscriptionFailure.CONNECT_FAILED
+        val phases = mutableListOf<FilterSyncPhase>()
+        val coordinator = coordinator()
+        coordinator.addSyncListener { phases += it }
+
+        coordinator.selectMode(FilterMode.STRICT)
+
+        assertEquals(FilterSyncPhase.IDLE, phases.last())
+        assertFalse(FilterSyncPhase.SUCCEEDED in phases)
+    }
+
+    /** A tap that has nothing to download must not leave an 更新中 line behind. */
+    @Test
+    fun aSelectionWithNothingToDoDoesNotShowProgress() {
+        storeReadyStandardInCustomMode()
+        val phases = mutableListOf<FilterSyncPhase>()
+        val coordinator = coordinator()
+        coordinator.addSyncListener { phases += it }
+
+        coordinator.selectMode(FilterMode.CUSTOM)
+        coordinator.selectSource(FilterSource.HAGEZI_NORMAL, true)
+
+        assertTrue("no task was started, so no phase may be shown: $phases", phases.isEmpty())
     }
 
     @Test
