@@ -50,6 +50,7 @@ import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
+import tw.kuies.block.filter.FilterSyncPhase
 import tw.kuies.block.filter.FilterUpdateSchedulePolicy
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
@@ -136,11 +137,19 @@ fun KuiesBlockApp(
     // Null until the coordinator has read the stored settings, so the strength list marks no choice
     // rather than guessing one.
     var filterStatus by remember { mutableStateOf<FilterStatus?>(null) }
-    var filterBusy by remember { mutableStateOf(false) }
+    // What a mode or source change is doing now. Kept separate from the status so a background
+    // check can be reported while the rules that are already published stay visible.
+    var filterSyncPhase by remember { mutableStateOf(FilterSyncPhase.IDLE) }
 
     // A manual update is separate from choosing a mode: it re-downloads the lists already in use, so
     // the two must not share one flag and make the screen describe the wrong action.
     var filterUpdating by remember { mutableStateOf(false) }
+
+    // 立即更新 is the only caller of filterUpdating, and a mode change can supersede its request. The
+    // coordinator then reports no second result, so the idle phase is what re-enables the button.
+    LaunchedEffect(filterSyncPhase) {
+        if (filterSyncPhase == FilterSyncPhase.IDLE) filterUpdating = false
+    }
 
     // Per-app exclusions are a VPN-scope setting, kept separate from FilterSettings. The list is
     // loaded only when the management page is opened, off the main thread.
@@ -202,6 +211,16 @@ fun KuiesBlockApp(
         FilterCoordinatorHolder.get(appContext).publishCurrentAsync { status ->
             mainHandler.post { filterStatus = status }
         }
+        // The background update is reported separately from the status: a cached list is already in
+        // effect while its refresh runs, and the screen must be able to say both things at once.
+        val removeSyncListener = FilterCoordinatorHolder.get(appContext).addSyncListener { phase ->
+            mainHandler.post { filterSyncPhase = phase }
+        }
+        // A background sweep publishes a new snapshot without any tap on this screen; the counts and
+        // the 目前狀態 line have to follow it rather than stay on the older snapshot.
+        val removeStatusListener = FilterCoordinatorHolder.get(appContext).addStatusListener { status ->
+            mainHandler.post { filterStatus = status }
+        }
         // Read the stored preferences once and make the platform agree with them, so an app update or a
         // restore leaves the user's interval in force instead of losing the schedule.
         val storedAutoUpdate = updateStore.load()
@@ -209,6 +228,8 @@ fun KuiesBlockApp(
         bootAutostart = protectionIntentStore.bootAutostartEnabled()
         FilterUpdateSchedulePolicy.apply(storedAutoUpdate, updateScheduler)
         onDispose {
+            removeSyncListener()
+            removeStatusListener()
             // A download belongs to this composition: leaving it closes the HTTP call and lets the
             // downloader remove its partial file. A completed APK stays only until the next check.
             updateJob?.cancel()
@@ -495,17 +516,15 @@ fun KuiesBlockApp(
      * There is no "off" choice: turning protection off is the home switch's job, and picking a mode
      * only chooses which lists are used — it never starts the tunnel.
      *
-     * The coordinator calls back twice: immediately with the state that needs no network, then once
-     * the download settled. Only the second callback clears the busy flag, so the screen cannot claim
-     * the download finished while it is still running.
+     * The coordinator saves and publishes the choice at once, applies whatever is already cached, and
+     * then checks the list in the background. It reports progress through the sync listener, so a
+     * second tap is never blocked and supersedes the first request rather than queueing another
+     * download of a tier the user has already left.
      */
     fun selectFilterMode(mode: FilterMode) {
-        if (filterBusy) return
-        filterBusy = true
         FilterCoordinatorHolder.get(appContext).selectMode(
             mode = mode,
-            onStatus = { status -> mainHandler.post { filterStatus = status } },
-            onFinished = { mainHandler.post { filterBusy = false } }
+            onStatus = { status -> mainHandler.post { filterStatus = status } }
         )
     }
 
@@ -513,16 +532,14 @@ fun KuiesBlockApp(
      * Turns one custom-mode source on or off.
      *
      * The selection is published before any network work, so ticking a source that is already
-     * downloaded takes effect immediately. A source with no stored content is downloaded once.
+     * downloaded takes effect immediately. Missing sources are fetched in one debounced pass, so a
+     * row of taps does not start one download per tap.
      */
     fun selectFilterSource(source: FilterSource, selected: Boolean) {
-        if (filterBusy) return
-        filterBusy = true
         FilterCoordinatorHolder.get(appContext).selectSource(
             source = source,
             selected = selected,
-            onStatus = { status -> mainHandler.post { filterStatus = status } },
-            onFinished = { mainHandler.post { filterBusy = false } }
+            onStatus = { status -> mainHandler.post { filterStatus = status } }
         )
     }
 
@@ -836,7 +853,7 @@ fun KuiesBlockApp(
             themeMode = themeMode,
             onSetThemeMode = onThemeModeChange,
             filterStatus = filterStatus,
-            filterBusy = filterBusy,
+            filterSyncPhase = filterSyncPhase,
             filterUpdating = filterUpdating,
             privateDnsMode = privateDnsMode,
             // The real state, not a yes/no: the strength section tells a fresh install, a start in

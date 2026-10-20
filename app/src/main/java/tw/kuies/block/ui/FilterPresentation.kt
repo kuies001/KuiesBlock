@@ -10,6 +10,7 @@ import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterSourceStatus
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterSyncPhase
 import tw.kuies.block.filter.FilterUpdateRecord
 import tw.kuies.block.filter.LocalFilterPolicy
 import tw.kuies.block.filter.LocalFilterState
@@ -67,11 +68,11 @@ object FilterPresentation {
     fun strengthDetail(profile: FilterProfile): String = modeDetail(FilterMode.forProfile(profile))
 
     /**
-     * The effective state, in the order the user needs it: a download in progress → whether
-     * interception is active at all → paused by Private DNS → not ready → in effect.
+     * The effective state, in the order the user needs it: whether interception is active at all →
+     * paused by Private DNS → not ready → in effect.
      *
-     * [busy] is a download in progress, which is reported before anything else because it explains
-     * why the numbers have not moved yet.
+     * A background update is reported by [syncHint] next to this line rather than in place of it, so
+     * rules that are already in effect are never hidden behind a download.
      *
      * [protectionState] is the real state the service reported, not a yes/no. Four of its cases must
      * read differently, because they mean different things to the user:
@@ -92,11 +93,8 @@ object FilterPresentation {
         status: FilterStatus,
         privateDnsMode: PrivateDnsMode,
         protectionState: ProtectionState,
-        isServiceRunning: Boolean = false,
-        busy: Boolean = false
+        isServiceRunning: Boolean = false
     ): String {
-        if (busy) return "正在下載清單…"
-
         if (!ProtectionStateRules.isInterceptionActive(protectionState)) {
             return when (protectionState) {
                 ProtectionState.STARTING -> "正在啟動防護…"
@@ -133,6 +131,35 @@ object FilterPresentation {
         status.subscriptions
             .firstOrNull { it.id == FilterSubscription.PROFILE_SUBSCRIPTION_ID }
             ?.state == SubscriptionState.FAILED
+
+    /**
+     * A short line about the background update itself, or null when there is nothing to add.
+     *
+     * Kept beside [stateLabel] rather than inside it: the state line describes the rules that are
+     * really published, while this line describes the work still running. That is what lets 規則已生效
+     * and 正在下載最新版 be shown at the same time instead of one hiding the other.
+     *
+     * A failure with rules still published stays visible — it is the honest description of the list
+     * the user is relying on, not a temporary progress message.
+     */
+    fun syncHint(status: FilterStatus, phase: FilterSyncPhase): String? = when {
+        phase != FilterSyncPhase.IDLE ->
+            if (status.effectiveRuleCount > 0) "正在更新過濾規則…" else "正在準備過濾規則…"
+        hasFailedActiveSource(status) && status.effectiveRuleCount > 0 ->
+            "更新失敗，使用現有規則。"
+        else -> null
+    }
+
+    /** True when [syncHint] is reporting a failure rather than progress. */
+    fun syncHintIsError(status: FilterStatus, phase: FilterSyncPhase): Boolean =
+        phase == FilterSyncPhase.IDLE &&
+            hasFailedActiveSource(status) &&
+            status.effectiveRuleCount > 0
+
+    private fun hasFailedActiveSource(status: FilterStatus): Boolean =
+        status.sourceStatuses.any {
+            it.enabled && it.state == SubscriptionState.FAILED && it.ruleCount > 0
+        }
 
     /**
      * The last *automatic* check, which is a different question from the last successful update above.

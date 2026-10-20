@@ -45,6 +45,7 @@ import tw.kuies.block.filter.FilterIntervalDraft
 import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
+import tw.kuies.block.filter.FilterSyncPhase
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.update.ReleaseInfo
 import tw.kuies.block.update.UpdateCheckOutcome
@@ -65,7 +66,8 @@ fun SettingsScreen(
     themeMode: ThemeMode,
     onSetThemeMode: (ThemeMode) -> Unit,
     filterStatus: FilterStatus?,
-    filterBusy: Boolean,
+    /** What a mode or source change is doing now; shown beside the state, never in place of it. */
+    filterSyncPhase: FilterSyncPhase,
     filterUpdating: Boolean,
     privateDnsMode: PrivateDnsMode,
     /** The real protection state; the strength section derives its status line from it. */
@@ -118,7 +120,7 @@ fun SettingsScreen(
         ThemeSection(themeMode = themeMode, onSetThemeMode = onSetThemeMode)
         InterceptionStrengthSection(
             status = filterStatus,
-            busy = filterBusy,
+            phase = filterSyncPhase,
             privateDnsMode = privateDnsMode,
             protectionState = protectionState,
             isServiceRunning = isServiceRunning,
@@ -342,7 +344,7 @@ private fun FilterSourceSection(
 @Composable
 private fun InterceptionStrengthSection(
     status: FilterStatus?,
-    busy: Boolean,
+    phase: FilterSyncPhase,
     privateDnsMode: PrivateDnsMode,
     protectionState: ProtectionState,
     isServiceRunning: Boolean,
@@ -367,7 +369,9 @@ private fun InterceptionStrengthSection(
                 mode = mode,
                 // Until the settings have loaded, nothing is marked as the current choice.
                 selected = status != null && status.mode == mode,
-                enabled = !busy,
+                // A running update must not lock the choice: switching again is exactly how a slow
+                // download is abandoned, and the coordinator merges the requests.
+                enabled = true,
                 onSelectMode = { selected ->
                     onSelectMode(selected)
                     // Custom keeps the picker open; the three fixed tiers collapse after selection.
@@ -378,16 +382,27 @@ private fun InterceptionStrengthSection(
         if (status?.mode == FilterMode.CUSTOM) {
             CustomSourcePicker(
                 status = status,
-                busy = busy,
                 onSetSourceSelected = onSetSourceSelected
             )
         }
         LabeledValue(
             label = stringResource(R.string.filter_state_label),
             value = status?.let {
-                FilterPresentation.stateLabel(it, privateDnsMode, protectionState, isServiceRunning, busy)
+                FilterPresentation.stateLabel(it, privateDnsMode, protectionState, isServiceRunning)
             } ?: stringResource(R.string.filter_state_label_loading)
         )
+        val syncHint = status?.let { FilterPresentation.syncHint(it, phase) }
+        if (status != null && syncHint != null) {
+            Text(
+                text = syncHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (FilterPresentation.syncHintIsError(status, phase)) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
     }
 }
 
@@ -436,7 +451,6 @@ private fun ModeOption(
 @Composable
 private fun CustomSourcePicker(
     status: FilterStatus,
-    busy: Boolean,
     onSetSourceSelected: (FilterSource, Boolean) -> Unit
 ) {
     Text(
@@ -457,8 +471,9 @@ private fun CustomSourcePicker(
             source = source,
             selected = selected,
             // A selected checkbox cannot be the last one removed; a radio row changes by selecting
-            // another tier rather than by unchecking itself.
-            enabled = !busy && (!selected || source.isMultiTier || selectedCount > 1),
+            // another tier rather than by unchecking itself. A running update never locks the list:
+            // the debounce merges a row of taps into one download.
+            enabled = !selected || source.isMultiTier || selectedCount > 1,
             onSetSelected = { checked -> onSetSourceSelected(source, checked) }
         )
     }

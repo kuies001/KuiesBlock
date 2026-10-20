@@ -83,9 +83,11 @@ data class FilterSettings(
     /**
      * Switches to one of the three preset strengths.
      *
-     * The new tier's list replaces the old main-list entry and its download state starts from scratch:
-     * the stored copy on disk belongs to the previous list, so it is not marked ready and its ETag is
-     * dropped. User subscriptions and other downloaded preset sources are kept untouched, and
+     * When the stored main list already *is* the requested tier, its bookkeeping and ETag are kept:
+     * the copy on disk belongs to that list, so the new mode can be published from it before any
+     * network work, and the follow-up check is a conditional request. A genuinely different tier
+     * starts over — the stored copy belongs to the previous list, so it is not marked ready and its
+     * ETag is dropped. User subscriptions and other downloaded preset sources are kept untouched, and
      * [selectedSources] is left alone so a later switch back to CUSTOM keeps the user's selection.
      */
     fun withProfile(profile: FilterProfile): FilterSettings {
@@ -93,13 +95,22 @@ data class FilterSettings(
         val selection = sanitiseSelection(selectedSources).ifEmpty {
             setOf(FilterSource.forProfile(profile).id)
         }
+        val existingMain = builtInSubscription
+        val main = existingMain?.takeIf {
+            it.origin == SubscriptionOrigin.BUILT_IN &&
+                (it.url == profile.primaryUrl || it.url == profile.fallbackUrl)
+        } ?: FilterSubscription.forProfile(profile)
         return copy(
             profile = profile,
             mode = FilterMode.forProfile(profile),
             selectedSources = selection,
             enabled = true,
-            subscriptions = listOf(FilterSubscription.forProfile(profile)) + others,
-            etags = etags - FilterSubscription.PROFILE_SUBSCRIPTION_ID
+            subscriptions = listOf(main) + others,
+            etags = if (main === existingMain) {
+                etags
+            } else {
+                etags - FilterSubscription.PROFILE_SUBSCRIPTION_ID
+            }
         )
     }
 

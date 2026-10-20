@@ -14,6 +14,7 @@ import tw.kuies.block.filter.FilterSettings
 import tw.kuies.block.filter.FilterSnapshot
 import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterSubscription
+import tw.kuies.block.filter.FilterSyncPhase
 import tw.kuies.block.filter.SubscriptionState
 import tw.kuies.block.ui.FilterPresentation
 import tw.kuies.block.ui.ProtectionPresentation
@@ -168,15 +169,45 @@ class FilterPresentationTest {
     }
 
     @Test
-    fun aDownloadInProgressIsSaidBeforeAnythingElse() {
-        val label = FilterPresentation.stateLabel(
-            readyStatus(rules = 5),
-            PrivateDnsMode.HOSTNAME,
-            ProtectionState.NOT_AUTHORIZED,
-            busy = true
+    fun aFailedBackgroundUpdateSaysTheExistingRulesAreStillInUse() {
+        val settings = FilterSettings.forProfile(FilterProfile.STANDARD).withSubscription(
+            FilterSubscription.forProfile(FilterProfile.STANDARD).copy(
+                state = SubscriptionState.FAILED,
+                ruleCount = 5,
+                lastSuccessAtMillis = 1_000L,
+                lastError = "network error"
+            )
+        )
+        val status = FilterStatus.of(
+            settings,
+            FilterSnapshot.build(subscriptionBlock = DomainSet.ofNormalised(listOf("ads.example")))
         )
 
-        assertEquals("正在下載清單…", label)
+        assertEquals(
+            "更新失敗，使用現有規則。",
+            FilterPresentation.syncHint(status, FilterSyncPhase.IDLE)
+        )
+        assertTrue(FilterPresentation.syncHintIsError(status, FilterSyncPhase.IDLE))
+        assertEquals(
+            "the state line keeps describing the rules that are really published",
+            "本機規則生效中（1 條）。",
+            FilterPresentation.stateLabel(status, PrivateDnsMode.OFF, ProtectionState.ACTIVE)
+        )
+    }
+
+    @Test
+    fun aDownloadInProgressIsSaidBeforeAnythingElse() {
+        assertEquals(
+            "正在準備過濾規則…",
+            FilterPresentation.syncHint(
+                FilterStatus.of(FilterSettings.DEFAULTS, FilterSnapshot.EMPTY),
+                FilterSyncPhase.PREPARING
+            )
+        )
+        assertEquals(
+            "正在更新過濾規則…",
+            FilterPresentation.syncHint(readyStatus(rules = 5), FilterSyncPhase.UPDATING)
+        )
     }
 
     @Test
