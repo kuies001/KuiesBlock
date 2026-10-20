@@ -2,6 +2,40 @@
 
 本專案遵循語意化版本。以下記錄各版本的實際變更。
 
+## v0.5.0
+
+**主題：背景執行保護**
+
+### 新增／變更
+
+- 首頁「App 個別設定」與「DNS 自動備援」之間新增「背景執行保護」卡片：未授權時顯示說明、
+  「尚未允許」與「允許背景執行」按鈕；取得豁免後縮為單列「已允許 ✓」，不再顯示說明或按鈕。
+- 授權狀態只以 `PowerManager.isIgnoringBatteryOptimizations()` 為準，每次回到首頁（含從系統
+  設定返回）都重新查詢；在 Android 設定撤銷後會恢復申請卡片，不以 SharedPreferences 記錄
+  「使用者曾按下允許」。
+- 只有使用者點擊按鈕才開啟系統畫面：優先使用 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+  並帶入 `package:` URI；裝置不支援時改用 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`；
+  兩者皆無法開啟時顯示簡短提示，不會閃退，也不模擬或自動點擊系統確認視窗。
+- 豁免為使用者自主選擇，不是 VPN 啟動前置條件：未授權仍可啟用防護、使用本機攔截、DNS 自動
+  備援、調整過濾器與 App 個別設定。
+- 未新增背景服務、週期性 Worker、WakeLock、AlarmManager 或輪詢；沿用既有 VPN 前景服務。
+- Manifest 新增 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`，僅用於開啟系統授權流程。
+- `versionName` → `0.5.0`，`versionCode` → `15`。
+
+### 驗證（v0.5.0）
+
+- `:app:assembleDebug` PASS。
+- 直接相關單元測試 PASS：授權狀態讀取與撤銷、直接授權 Intent 與備援頁面選擇、無處理程式時
+  回報失敗而不拋出例外、首頁卡片位置與兩種顯示、文案守門。
+- 實機授權視窗行為、三星 One UI 電池限制與卡片視覺呈現尚未經實機驗證（INCONCLUSIVE）。
+
+### 已知限制（v0.5.0）
+
+- Android 電池最佳化豁免不等於三星 One UI 的所有背景限制；本版未使用 Samsung 私有 API，也
+  不修改其休眠 App 清單，亦不宣稱已取得三星全部背景執行權限。
+- 即使取得豁免，Android 仍可能因系統資源不足、手機廠牌限制或使用者強制停止而終止 App。
+- v0.4.50 與之前版本的所有已知限制繼續適用。
+
 ## v0.4.50
 
 **主題：DNS 自動備援**
