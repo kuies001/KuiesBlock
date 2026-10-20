@@ -2,6 +2,7 @@ package tw.kuies.block
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,44 @@ class SettingsScreenSurfaceTest {
         assertTrue(!strings.contains("settings_update_section"))
         assertTrue(!strings.contains("settings_about_version"))
     }
+
+    /**
+     * A radio tap may only move the draft; the preference and the scheduler are reached exclusively
+     * through the confirmed save action, which is offered only while the draft differs.
+     */
+    @Test
+    fun theIntervalChoiceIsOnlyADraftUntilSaveIsPressed() {
+        val controls = autoUpdateControlsSource()
+        val strings = stringsXml()
+
+        assertTrue(controls.contains("FilterIntervalDraft"))
+        assertTrue(controls.contains("current.select(interval)"))
+        assertTrue(controls.contains("current.hasPendingChange"))
+        assertTrue(controls.contains("onSaveInterval(current.selected)"))
+        assertFalse(controls.contains("onSetInterval("))
+        assertTrue(strings.contains("<string name=\"filter_auto_update_save\">儲存並更新</string>"))
+        assertTrue(
+            strings.contains(
+                "<string name=\"filter_auto_update_save_failed\">無法儲存更新週期，請再試一次</string>"
+            )
+        )
+    }
+
+    /** Closing the section or switching automatic updates off discards the unconfirmed pick. */
+    @Test
+    fun closingTheSectionOrTheSwitchDropsTheDraft() {
+        val controls = autoUpdateControlsSource()
+
+        assertEquals(
+            "both the collapse and the off switch must reset the draft to the stored interval",
+            2,
+            Regex("FilterIntervalDraft\\.of\\(saved\\)").findAll(controls).count()
+        )
+    }
+
+    private fun autoUpdateControlsSource(): String = settingsScreenSource()
+        .substringAfter("private fun AutoUpdateControls")
+        .substringBefore("private fun autoUpdateIntervalLabel")
 
     private fun settingsScreenSource(): String =
         locate("src/main/java/tw/kuies/block/ui/SettingsScreen.kt").readText(Charsets.UTF_8)

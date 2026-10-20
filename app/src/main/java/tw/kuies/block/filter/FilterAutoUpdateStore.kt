@@ -40,6 +40,16 @@ class FilterAutoUpdateStore(private val prefs: SharedPreferences) {
         prefs.edit().putInt(KEY_INTERVAL_HOURS, interval.hours.toInt()).apply()
     }
 
+    /**
+     * Stores one interval and reports whether the write really happened.
+     *
+     * Uses `commit()` because the caller has to distinguish "saved" from "not saved" before it can
+     * claim the new period is in force; the file is a few bytes, so the write is not a main-thread
+     * cost worth avoiding.
+     */
+    fun saveInterval(interval: UpdateInterval): Boolean =
+        prefs.edit().putInt(KEY_INTERVAL_HOURS, interval.hours.toInt()).commit()
+
     /** The last check, or [UpdateCheckOutcome.Never] when none has run yet. */
     fun loadRecord(): FilterUpdateRecord = FilterUpdateRecord(
         checkedAtMillis = if (prefs.contains(KEY_CHECKED_AT)) {

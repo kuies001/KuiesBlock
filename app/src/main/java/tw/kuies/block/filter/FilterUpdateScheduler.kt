@@ -34,6 +34,43 @@ object FilterUpdateSchedulePolicy {
 }
 
 /**
+ * Commits an interval the user confirmed with 「儲存並更新」.
+ *
+ * The order matters: persist first, then make the one periodic job agree, and only then run the one
+ * extra refresh the button promises. A failure at either step leaves the previous interval in force —
+ * the preference is rolled back if scheduling fails, so the stored value, the schedule and the summary
+ * cannot disagree. [onSaved] is invoked exactly once and only for a real change, which is what keeps
+ * a double tap or a repeated confirmation from starting a second download.
+ */
+object FilterIntervalSavePolicy {
+
+    fun save(
+        interval: UpdateInterval,
+        store: FilterAutoUpdateStore,
+        scheduler: PeriodicUpdateScheduler,
+        onSaved: () -> Unit = {}
+    ): Boolean {
+        val current = store.load()
+        if (current.interval == interval) return true
+
+        if (!store.saveInterval(interval)) return false
+        val updated = current.copy(interval = interval)
+
+        val scheduled = runCatching { FilterUpdateSchedulePolicy.apply(updated, scheduler) }
+        if (scheduled.isFailure) {
+            // Put the previous interval back, then re-assert its schedule so a half-applied change
+            // cannot survive. The caller reports the failure and the screen keeps the draft.
+            store.saveInterval(current.interval)
+            runCatching { FilterUpdateSchedulePolicy.apply(current, scheduler) }
+            return false
+        }
+
+        onSaved()
+        return true
+    }
+}
+
+/**
  * The production scheduler: one unique periodic WorkManager job.
  *
  * The guarantees come from WorkManager rather than from bookkeeping of our own:

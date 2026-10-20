@@ -15,6 +15,9 @@ class FakeSharedPreferences : SharedPreferences {
     private val values = LinkedHashMap<String, Any>()
     private val listeners = mutableListOf<SharedPreferences.OnSharedPreferenceChangeListener>()
 
+    /** When true, [Editor.commit] reports failure and writes nothing, like a read-only file. */
+    var commitFails = false
+
     override fun getAll(): MutableMap<String, *> = LinkedHashMap(values)
 
     override fun getString(key: String?, defValue: String?): String? = typed<String>(key) ?: defValue
@@ -95,6 +98,7 @@ class FakeSharedPreferences : SharedPreferences {
         }
 
         override fun commit(): Boolean {
+            if (commitFails) return false
             commitToMemory()
             return true
         }

@@ -45,6 +45,7 @@ import tw.kuies.block.dns.PrivateDnsSettings
 import tw.kuies.block.filter.FilterAutoUpdateSettings
 import tw.kuies.block.filter.FilterAutoUpdateStore
 import tw.kuies.block.filter.FilterCoordinatorHolder
+import tw.kuies.block.filter.FilterIntervalSavePolicy
 import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSettingsStore
 import tw.kuies.block.filter.FilterSource
@@ -556,12 +557,27 @@ fun KuiesBlockApp(
         FilterUpdateSchedulePolicy.apply(updated, updateScheduler)
     }
 
-    /** Changes the interval. The unique job is updated in place, so no second job is ever created. */
-    fun setUpdateInterval(interval: UpdateInterval) {
-        val updated = updateStore.load().copy(interval = interval)
-        updateStore.save(updated)
-        autoUpdate = updated
-        FilterUpdateSchedulePolicy.apply(updated, updateScheduler)
+    /**
+     * Commits the interval the user confirmed with 「儲存並更新」.
+     *
+     * The preference and the one periodic job are updated by [FilterIntervalSavePolicy], and only a
+     * real change runs the extra refresh the button promises — through [updateFilterNow], whose
+     * existing `filterUpdating` guard keeps a tap during a running update from starting a second one.
+     * The screen is then given the value that is really stored, so a failed write cannot be shown as
+     * if the new period were in force.
+     */
+    fun saveUpdateIntervalAndUpdate(interval: UpdateInterval) {
+        val saved = FilterIntervalSavePolicy.save(interval, updateStore, updateScheduler) {
+            updateFilterNow()
+        }
+        autoUpdate = updateStore.load()
+        if (!saved) {
+            Toast.makeText(
+                appContext,
+                R.string.filter_auto_update_save_failed,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     fun setBootAutostart(enabled: Boolean) {
@@ -832,7 +848,7 @@ fun KuiesBlockApp(
             onSetSourceSelected = { source, selected -> selectFilterSource(source, selected) },
             autoUpdate = autoUpdate,
             onSetAutoUpdateEnabled = { enabled -> setAutoUpdateEnabled(enabled) },
-            onSetUpdateInterval = { interval -> setUpdateInterval(interval) },
+            onSaveUpdateInterval = { interval -> saveUpdateIntervalAndUpdate(interval) },
             bootAutostartEnabled = bootAutostart,
             alwaysOnVpnEnabled = alwaysOnVpn,
             anotherVpnActive = anotherVpnActive,

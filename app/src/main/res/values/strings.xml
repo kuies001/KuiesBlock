@@ -106,6 +106,9 @@
     <string name="filter_auto_update_detail">只更新已下載的清單；系統可能延後執行。</string>
     <string name="filter_auto_update_interval_8">每 8 小時</string>
     <string name="filter_auto_update_interval_24">每 24 小時</string>
+    <!-- 只有選了不同於已儲存的週期時才出現；按下後才儲存、重排並立即更新一次。 -->
+    <string name="filter_auto_update_save">儲存並更新</string>
+    <string name="filter_auto_update_save_failed">無法儲存更新週期，請再試一次</string>
 
     <!-- 開機自動啟動：預設關閉，且不宣稱一定成功。 -->
     <string name="settings_boot_section">開機自動啟動防護</string>

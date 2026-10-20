@@ -35,6 +35,33 @@ data class FilterAutoUpdateSettings(
     val interval: UpdateInterval = UpdateInterval.DEFAULT
 )
 
+/**
+ * The interval the user has picked on screen, kept apart from the one that is actually stored.
+ *
+ * Tapping a period changes only [selected]; nothing is written and no job is touched until the screen
+ * asks for [selected] to be saved. [saved] is what the summary and the scheduler still describe, so a
+ * selection that is never confirmed cannot leak into the preference file.
+ */
+data class FilterIntervalDraft(
+    val saved: UpdateInterval,
+    val selected: UpdateInterval = saved
+) {
+    /** True exactly while the screen should offer 「儲存並更新」. */
+    val hasPendingChange: Boolean
+        get() = selected != saved
+
+    /** Records a radio tap: the draft moves, the saved value does not. */
+    fun select(interval: UpdateInterval): FilterIntervalDraft = copy(selected = interval)
+
+    /** Starts again from [interval], discarding any unconfirmed selection. */
+    fun resetTo(interval: UpdateInterval): FilterIntervalDraft =
+        FilterIntervalDraft(saved = interval, selected = interval)
+
+    companion object {
+        fun of(saved: UpdateInterval): FilterIntervalDraft = FilterIntervalDraft(saved = saved)
+    }
+}
+
 /** What the most recent automatic check actually did. */
 sealed interface UpdateCheckOutcome {
 

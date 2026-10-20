@@ -41,6 +41,7 @@ import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.data.ThemeMode
 import tw.kuies.block.dns.PrivateDnsMode
 import tw.kuies.block.filter.FilterAutoUpdateSettings
+import tw.kuies.block.filter.FilterIntervalDraft
 import tw.kuies.block.filter.FilterMode
 import tw.kuies.block.filter.FilterSource
 import tw.kuies.block.filter.FilterStatus
@@ -78,7 +79,8 @@ fun SettingsScreen(
     /** The automatic-update preference, or null until it is read. */
     autoUpdate: FilterAutoUpdateSettings?,
     onSetAutoUpdateEnabled: (Boolean) -> Unit,
-    onSetUpdateInterval: (UpdateInterval) -> Unit,
+    /** Commits the interval the user confirmed with 「儲存並更新」. */
+    onSaveUpdateInterval: (UpdateInterval) -> Unit,
     /** Whether protection should come back by itself after a restart, and how the platform can help. */
     bootAutostartEnabled: Boolean,
     alwaysOnVpnEnabled: Boolean,
@@ -129,7 +131,7 @@ fun SettingsScreen(
             autoUpdate = autoUpdate,
             onUpdateNow = onUpdateFilterNow,
             onSetAutoUpdateEnabled = onSetAutoUpdateEnabled,
-            onSetUpdateInterval = onSetUpdateInterval
+            onSaveUpdateInterval = onSaveUpdateInterval
         )
         BootAutostartSection(
             enabled = bootAutostartEnabled,
@@ -250,7 +252,7 @@ private fun FilterSourceSection(
     autoUpdate: FilterAutoUpdateSettings?,
     onUpdateNow: () -> Unit,
     onSetAutoUpdateEnabled: (Boolean) -> Unit,
-    onSetUpdateInterval: (UpdateInterval) -> Unit
+    onSaveUpdateInterval: (UpdateInterval) -> Unit
 ) {
     SectionCard(title = stringResource(R.string.settings_filter_sources_section)) {
         if (status == null) {
@@ -312,7 +314,7 @@ private fun FilterSourceSection(
         AutoUpdateControls(
             settings = autoUpdate,
             onSetEnabled = onSetAutoUpdateEnabled,
-            onSetInterval = onSetUpdateInterval
+            onSaveInterval = onSaveUpdateInterval
         )
         FilterPresentation.sourceAttributionLabel(status)?.let { attribution ->
             Text(
@@ -869,10 +871,15 @@ private fun LabeledValue(label: String, value: String) {
 private fun AutoUpdateControls(
     settings: FilterAutoUpdateSettings?,
     onSetEnabled: (Boolean) -> Unit,
-    onSetInterval: (UpdateInterval) -> Unit
+    onSaveInterval: (UpdateInterval) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val enabled = settings?.enabled == true
+    val saved = settings?.interval
+    // A radio tap only moves this draft. The preference, the periodic job and the lists stay exactly
+    // as they are until 「儲存並更新」 is pressed; collapsing the section, switching automatic updates
+    // off or leaving the page drops the draft instead of quietly applying it.
+    var draft by remember(saved) { mutableStateOf(saved?.let(FilterIntervalDraft::of)) }
     val summary = when {
         settings == null -> stringResource(R.string.filter_state_label_loading)
         enabled -> stringResource(
@@ -885,14 +892,22 @@ private fun AutoUpdateControls(
         title = stringResource(R.string.filter_auto_update_section_title),
         value = summary,
         expanded = expanded,
-        onToggle = { expanded = !expanded }
+        onToggle = {
+            val next = !expanded
+            if (!next && saved != null) draft = FilterIntervalDraft.of(saved)
+            expanded = next
+        }
     )
     if (expanded) {
         ToggleRow(
             label = stringResource(R.string.filter_auto_update_toggle),
             checked = enabled,
             enabled = settings != null,
-            onCheckedChange = onSetEnabled
+            onCheckedChange = { checked ->
+                // Turning the feature off keeps the stored interval; an unconfirmed pick is dropped.
+                if (!checked && saved != null) draft = FilterIntervalDraft.of(saved)
+                onSetEnabled(checked)
+            }
         )
         Text(
             text = stringResource(R.string.filter_auto_update_detail),
@@ -900,13 +915,24 @@ private fun AutoUpdateControls(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         // The interval is only a real choice while automatic updates are on, so it is only offered then.
-        if (enabled) {
+        val current = draft
+        if (enabled && current != null) {
             UpdateInterval.entries.forEach { interval ->
                 ChoiceRow(
                     label = stringResource(autoUpdateIntervalLabel(interval)),
-                    selected = settings?.interval == interval,
-                    onSelect = { onSetInterval(interval) }
+                    selected = current.selected == interval,
+                    onSelect = { draft = current.select(interval) }
                 )
+            }
+            if (current.hasPendingChange) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(onClick = { onSaveInterval(current.selected) }) {
+                        Text(stringResource(R.string.filter_auto_update_save))
+                    }
+                }
             }
         }
     }
