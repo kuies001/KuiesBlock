@@ -335,10 +335,13 @@ private fun BatteryExemptionCard(granted: Boolean, onRequest: () -> Unit) {
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
-                    text = stringResource(R.string.home_background_granted),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary
+                // The state is one small icon: the title already names the row, so the visible text
+                // repeat is gone while TalkBack still hears the grant through the description.
+                Icon(
+                    painter = painterResource(R.drawable.ic_check_circle),
+                    contentDescription = stringResource(R.string.home_background_granted_description),
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         } else {

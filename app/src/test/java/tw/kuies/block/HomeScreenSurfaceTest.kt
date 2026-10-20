@@ -140,7 +140,8 @@ class HomeScreenSurfaceTest {
             "R.string.home_background_body",
             "R.string.home_background_pending",
             "R.string.home_background_action",
-            "R.string.home_background_granted",
+            "R.string.home_background_granted_description",
+            "R.drawable.ic_check_circle",
             "R.drawable.ic_battery",
             "if (granted)"
         )
@@ -169,8 +170,12 @@ class HomeScreenSurfaceTest {
             assertFalse("the granted row must not render $token", grantedBranch.contains(token))
         }
         assertTrue(
-            "the granted row must state the exemption",
-            grantedBranch.contains("home_background_granted")
+            "the granted row must state the exemption for screen readers",
+            grantedBranch.contains("home_background_granted_description")
+        )
+        assertFalse(
+            "the granted row must not draw the old text status",
+            grantedBranch.contains("已允許") || grantedBranch.contains("home_background_granted\"")
         )
     }
 

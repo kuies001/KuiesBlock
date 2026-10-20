@@ -19,7 +19,7 @@ class HomeBatteryExemptionCopyTest {
         "home_background_body" to "減少系統限制，讓廣告攔截持續運作。",
         "home_background_pending" to "尚未允許",
         "home_background_action" to "允許背景執行",
-        "home_background_granted" to "已允許 ✓"
+        "home_background_granted_description" to "已允許背景執行"
     )
 
     @Test
@@ -28,6 +28,17 @@ class HomeBatteryExemptionCopyTest {
         approved.forEach { (name, text) ->
             assertEquals("$name must keep the approved copy", text, stringValue(strings, name))
         }
+    }
+
+    /**
+     * The granted state is an icon and nothing else. Keeping the old text resource would let a later
+     * edit draw 「已允許 ✓」 again, which is exactly the crowding this round removes.
+     */
+    @Test
+    fun theGrantedStateHasNoVisibleTextResource() {
+        val strings = stringsXml()
+        assertEquals(0, Regex("<string name=\"home_background_granted\">").findAll(strings).count())
+        assertEquals(0, Regex("已允許 ✓").findAll(strings).count())
     }
 
     @Test
