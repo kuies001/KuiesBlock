@@ -28,6 +28,13 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
+      Lets the battery-exemption request open Android's own dialog for this package instead of only
+      the exemption list. The permission grants nothing by itself: the system asks the user, and the
+      app reads the real answer from PowerManager on resume. It is never a condition for protection.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
       The per-app page lists user-visible launcher apps. Query only that intent instead of requesting
       QUERY_ALL_PACKAGES; apps without a launcher entry are intentionally not offered.
     -->

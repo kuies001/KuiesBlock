@@ -116,6 +116,64 @@ class HomeScreenSurfaceTest {
         }
     }
 
+    /**
+     * The battery-exemption card sits exactly where the requirement puts it: after the per-app entry
+     * and before the DNS backup card, so a later edit cannot slide it down the screen.
+     */
+    @Test
+    fun theBatteryExemptionCardSitsBetweenThePerAppEntryAndDnsFallback() {
+        val source = homeScreenSource()
+        val perApp = source.indexOf("AppProtectionEntry(onOpen")
+        val battery = source.indexOf("BatteryExemptionCard(")
+        val dns = source.indexOf("DnsFallbackCard(")
+        assertTrue("the home screen must offer the per-app entry first", perApp >= 0)
+        assertTrue("the battery card must follow the per-app entry", battery > perApp)
+        assertTrue("the DNS backup card must follow the battery card", dns > battery)
+    }
+
+    /** Both states are drawn: the request with its explanation, and the collapsed granted row. */
+    @Test
+    fun theHomeScreenDrawsTheBatteryExemptionInBothStates() {
+        val source = homeScreenSource()
+        val required = listOf(
+            "R.string.home_background_title",
+            "R.string.home_background_body",
+            "R.string.home_background_pending",
+            "R.string.home_background_action",
+            "R.string.home_background_granted",
+            "R.drawable.ic_battery",
+            "if (granted)"
+        )
+        required.forEach { token ->
+            assertTrue("HomeScreen.kt should render $token", source.contains(token))
+        }
+    }
+
+    /**
+     * The granted row is one line and nothing else: keeping the explanation, the status or the button
+     * in that branch would show a user who already allowed it something left to do.
+     */
+    @Test
+    fun theGrantedBatteryRowHidesTheExplanationAndTheButton() {
+        val card = homeScreenSource()
+            .substringAfter("private fun BatteryExemptionCard")
+            .substringBefore("private fun DnsFallbackCard")
+        val grantedBranch = card.substringAfter("if (granted) {").substringBefore("} else {")
+        val hidden = listOf(
+            "home_background_body",
+            "home_background_pending",
+            "home_background_action",
+            "Button("
+        )
+        hidden.forEach { token ->
+            assertFalse("the granted row must not render $token", grantedBranch.contains(token))
+        }
+        assertTrue(
+            "the granted row must state the exemption",
+            grantedBranch.contains("home_background_granted")
+        )
+    }
+
     /** Resolves the file through the module directory the test task runs in. */
     private fun homeScreenSource(): String {
         val relative = "src/main/java/tw/kuies/block/ui/HomeScreen.kt"

@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -26,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import tw.kuies.block.R
 import tw.kuies.block.core.ProtectionState
 import tw.kuies.block.core.ProtectionStateRules
 import tw.kuies.block.core.ProtectionStatusHolder
@@ -50,6 +52,7 @@ import tw.kuies.block.filter.FilterStatus
 import tw.kuies.block.filter.FilterUpdateSchedulePolicy
 import tw.kuies.block.filter.UpdateInterval
 import tw.kuies.block.filter.WorkManagerPeriodicUpdateScheduler
+import tw.kuies.block.power.BatteryOptimization
 import tw.kuies.block.update.AppVersion
 import tw.kuies.block.update.GitHubReleaseSource
 import tw.kuies.block.update.ReleaseInfo
@@ -158,6 +161,13 @@ fun KuiesBlockApp(
     // The DNS backup switch, read once at composition and then kept in step with the store.
     var dnsFallbackEnabled by remember {
         mutableStateOf(settingsStore.load().dnsAutoFallbackEnabled)
+    }
+
+    // Whether Android really exempts this app from battery optimisation. Only the platform answers:
+    // a stored "the user tapped allow" flag would keep the granted row after the exemption was
+    // revoked in Android's settings. Re-read on every resume by syncEnvironment().
+    var batteryExemptionGranted by remember {
+        mutableStateOf(BatteryOptimization.isExempt(appContext))
     }
 
     // The manual app-update check: whether one is running, what the last one found, and the release
@@ -451,6 +461,9 @@ fun KuiesBlockApp(
         // user has already changed in Android's settings and come back from.
         privateDnsMode = PrivateDnsSettings.read(appContext).mode
         dnsFallbackEnabled = settingsStore.load().dnsAutoFallbackEnabled
+        // Re-read on every resume: the exemption may have been granted in the system dialog or
+        // revoked in the system settings, and the home card must describe the answer as it is now.
+        batteryExemptionGranted = BatteryOptimization.isExempt(appContext)
         // Read-only probe for the guide's plain notice; it never stops or reconfigures that VPN.
         anotherVpnActive = OtherVpnProbe.anotherVpnHoldsTheSlot(appContext, KuiesVpnService.isRunning)
         // Re-read on every resume: the user may have turned Android's Always-on VPN on or off in the
@@ -568,6 +581,24 @@ fun KuiesBlockApp(
         dnsFallbackEnabled = enabled
         if (KuiesVpnService.isRunning) {
             KuiesVpnService.notifyDnsFallbackSettingChanged(appContext)
+        }
+    }
+
+    /**
+     * Opens Android's battery-exemption screen for this app, on the user's tap only.
+     *
+     * Nothing is granted here and nothing is stored: the platform owns the dialog or the settings
+     * page, and the real answer is read again when the app resumes. When no system screen can be
+     * opened the user gets a short notice instead of a crash, and protection keeps working exactly
+     * as it did before — the exemption is never a condition for it.
+     */
+    fun requestBatteryExemption() {
+        if (BatteryOptimization.isExempt(appContext)) {
+            batteryExemptionGranted = true
+            return
+        }
+        if (!BatteryOptimization.openRequest(appContext)) {
+            Toast.makeText(appContext, R.string.home_background_unavailable, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -769,7 +800,9 @@ fun KuiesBlockApp(
             isServiceRunning = KuiesVpnService.isRunning,
             dnsFallbackEnabled = dnsFallbackEnabled,
             dnsFallbackStatus = ProtectionStatusHolder.dnsFallbackStatus,
+            batteryExemptionGranted = batteryExemptionGranted,
             onSetDnsFallbackEnabled = { enabled -> setDnsFallbackEnabled(enabled) },
+            onRequestBatteryExemption = { requestBatteryExemption() },
             onToggleProtection = { onToggleProtection() },
             onOpenAppProtection = {
                 appProtectionReturnTo = BlockDestination.HOME

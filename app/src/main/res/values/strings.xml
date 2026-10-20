@@ -30,6 +30,17 @@
     <string name="home_app_settings_title">App 個別設定</string>
     <string name="home_app_settings_body">選擇哪些 App 不使用 KuiesBlock 防護</string>
 
+    <!--
+      首頁的背景執行保護卡片。文案為需求指定，不可改寫；已授權時只保留單列狀態，
+      不留下說明或按鈕，也不宣稱 App 因此永不會被系統終止。
+    -->
+    <string name="home_background_title">背景執行保護</string>
+    <string name="home_background_body">減少系統限制，讓廣告攔截持續運作。</string>
+    <string name="home_background_pending">尚未允許</string>
+    <string name="home_background_action">允許背景執行</string>
+    <string name="home_background_granted">已允許 ✓</string>
+    <string name="home_background_unavailable">無法開啟系統設定，請稍後再試</string>
+
     <!-- 首頁的 DNS 自動備援卡片。說明文字為需求指定，不可改寫。 -->
     <string name="dns_fallback_title">DNS 自動備援</string>
     <string name="dns_fallback_body">這將保護你的連線，當DNS異常時，仍能上網與攔截廣告</string>

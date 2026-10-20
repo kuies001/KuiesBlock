@@ -37,7 +37,8 @@ import tw.kuies.block.dns.DnsFallbackStatus
 
 /**
  * The whole home screen: the app name, the shield, the protection status, the one button that
- * turns protection on or off, the per-app entry and a short card of plain-language benefits.
+ * turns protection on or off, the per-app entry, the battery-exemption entry and a short card of
+ * plain-language benefits.
  *
  * Kept deliberately free of network detail. It shows no host name, no endpoint, no transport and
  * no counters — that is internal, and a plain user only needs to know whether protection is on. A
@@ -46,7 +47,8 @@ import tw.kuies.block.dns.DnsFallbackStatus
  *
  * The screen is also free of side effects: nothing here starts, stops or reconfigures the VPN. The
  * only way protection can change from this screen is a tap on the button, whose handler the caller
- * owns.
+ * owns. The battery exemption is the same: the card reports the platform's answer and its button
+ * only hands the tap to the caller.
  */
 @Composable
 fun HomeScreen(
@@ -55,7 +57,9 @@ fun HomeScreen(
     isServiceRunning: Boolean = false,
     dnsFallbackEnabled: Boolean,
     dnsFallbackStatus: DnsFallbackStatus,
+    batteryExemptionGranted: Boolean,
     onSetDnsFallbackEnabled: (Boolean) -> Unit,
+    onRequestBatteryExemption: () -> Unit,
     onToggleProtection: () -> Unit,
     onOpenAppProtection: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -79,6 +83,11 @@ fun HomeScreen(
         )
 
         AppProtectionEntry(onOpen = onOpenAppProtection)
+
+        BatteryExemptionCard(
+            granted = batteryExemptionGranted,
+            onRequest = onRequestBatteryExemption
+        )
 
         DnsFallbackCard(
             enabled = dnsFallbackEnabled,
@@ -284,6 +293,83 @@ private fun AppProtectionEntry(onOpen: () -> Unit) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
+        }
+    }
+}
+
+/**
+ * The way into Android's battery-optimisation exemption, between the per-app entry and the DNS
+ * backup card.
+ *
+ * It is voluntary and self-contained: the state comes from the platform, never from a stored answer,
+ * so a revocation restores the request. Once the exemption is held the card collapses to a single
+ * row — no explanation, no button, no extra hint — because there is nothing left to do. The button
+ * only hands the tap to the caller, which opens Android's own screen; this card never grants
+ * anything itself and never claims protection depends on it.
+ */
+@Composable
+private fun BatteryExemptionCard(granted: Boolean, onRequest: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        if (granted) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_battery),
+                    // Decorative: the title beside it names the row.
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = stringResource(R.string.home_background_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = stringResource(R.string.home_background_granted),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.home_background_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = stringResource(R.string.home_background_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = stringResource(R.string.home_background_pending),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                Button(
+                    onClick = onRequest,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.home_background_action))
+                }
+            }
         }
     }
 }
