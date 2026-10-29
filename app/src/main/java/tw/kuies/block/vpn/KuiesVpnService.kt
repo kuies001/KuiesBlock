@@ -533,16 +533,21 @@ class KuiesVpnService : VpnService() {
             builder.allowFamily(OsConstants.AF_INET)
         }
         val applied = LinkedHashSet<String>(exclusions.size)
-        for (packageName in exclusions) {
-            if (packageName == this.packageName) continue
+        for (packageName in SystemUidExclusion.forTunnel(exclusions, this.packageName)) {
             try {
                 builder.addDisallowedApplication(packageName)
-                applied.add(packageName)
+                if (!SystemUidExclusion.isSystem(packageName)) applied.add(packageName)
             } catch (_: PackageManager.NameNotFoundException) {
                 // The app was uninstalled between selection and a later tunnel start. Its stored
                 // choice is kept so reinstalling the same package can restore it.
                 Log.w(TAG, "Skipping an excluded app that is not installed.")
             } catch (exception: Exception) {
+                if (SystemUidExclusion.isSystem(packageName)) {
+                    // Losing the system-UID exclusion makes the settings pages describe the tunnel
+                    // again, but it must not cost the user their protection.
+                    Log.w(TAG, "The platform refused the system UID exclusion: ${exception.javaClass.simpleName}")
+                    continue
+                }
                 // A package the platform refuses must not be silently presented as excluded. Abort
                 // this attempt so the caller can restore the previous working set instead.
                 Log.w(TAG, "The platform rejected an excluded app: ${exception.javaClass.simpleName}")
